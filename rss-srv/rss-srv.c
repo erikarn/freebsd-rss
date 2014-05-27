@@ -214,6 +214,7 @@ main(int argc, char *argv[])
 	struct thr_setup *ts;
 	int ncpu;
 	int nbuckets;
+	int base_cpu;
 	int *bucket_map;
 
 	ncpu = rss_getsysctlint("net.inet.rss.ncpus");
@@ -227,6 +228,17 @@ main(int argc, char *argv[])
 		fprintf(stderr, "Couldn't read net.inet.rss.buckets\n");
 		exit(127);
 	}
+
+	base_cpu = rss_getsysctlint("net.inet.rss.basecpu");
+	if (base_cpu < 0) {
+		fprintf(stderr, "Couldn't read net.inet.rss.basecpu\n");
+		exit(127);
+	}
+
+	/*
+	 * XXX for now this isn't needed - the bucket mapping will
+	 * give us the explicit cpuid to use.
+	 */
 
 	/* Allocate enough threads - one per bucket */
 	ts = calloc(nbuckets, sizeof(*ts));
