@@ -4,11 +4,13 @@
 #include <strings.h>
 #include <err.h>
 #include <fcntl.h>
+#include <string.h>
 
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/param.h>
 #include <sys/cpuset.h>
+#include <sys/sysctl.h>
 
 #include <netinet/in.h>
 
@@ -23,6 +25,7 @@ struct thr_setup {
 	pthread_t thr;
 };
 
+/* XXX until these are in freebsd-head */
 #define	IP_BINDMULTI 25
 #define IP_RSS_LISTEN_BUCKET 26
 #define IP_RSSCPUID 71
@@ -42,8 +45,6 @@ srv_thr(void *s)
 	/* Pin */
 	CPU_ZERO(&cp);
 	CPU_SET(th->cpuid, &cp);
-
-	printf("%s: thread id %d -> CPU %d\n", __func__, th->tid, th->cpuid);
 
 	if (pthread_setaffinity_np(th->thr, sizeof(cpuset_t), &cp) != 0)
 		warn("pthread_setaffinity_np (id %d)", th->tid);
@@ -68,7 +69,7 @@ srv_thr(void *s)
 	}
 
 	/* Set RSS bucket */
-	printf("thr %d: bucket %d\n", th->tid, th->rss_bucket);
+	//printf("thr %d: bucket %d\n", th->tid, th->rss_bucket);
 	opt = th->rss_bucket;
 	optlen = sizeof(opt);
 	retval = setsockopt(th->s, IPPROTO_IP,
@@ -148,20 +149,108 @@ srv_thr(void *s)
 	return (NULL);
 }
 
+static int
+rss_getsysctlint(const char *s)
+{
+	int val, retval;
+	size_t rlen;
+
+	rlen = sizeof(int);
+	retval = sysctlbyname(s, &val, &rlen, NULL, 0);
+	if (retval < 0) {
+		warn("sysctlbyname (%s)", s);
+		return (-1);
+	}
+
+	return (val);
+}
+
+static int
+rss_getbucketmap(int *bucket_map, int nbuckets)
+{
+	/* XXX I'm lazy; so static string it is */
+	char bstr[2048];
+	int retval, i;
+	size_t rlen;
+	char *s, *ss;
+	int r, b, c;
+
+	/* Paranoia */
+	memset(bstr, '\0', sizeof(bstr));
+
+	rlen = sizeof(bstr) - 1;
+	retval = sysctlbyname("net.inet.rss.bucket_mapping", bstr, &rlen, NULL, 0);
+	if (retval < 0) {
+		warn("sysctlbyname (net.inet.rss.bucket_mapping)");
+		return (-1);
+	}
+
+	ss = bstr;
+	while ((s =strsep(&ss, " ")) != NULL) {
+		r = sscanf(s, "%d:%d", &b, &c);
+		if (r != 2) {
+			fprintf(stderr, "%s: string (%s) not parsable\n",
+			    __func__,
+			    s);
+			return (-1);
+		}
+		if (b > nbuckets) {
+			fprintf(stderr, "%s: bucket %d > nbuckets %d\n",
+			    __func__,
+			    b,
+			    nbuckets);
+			return (-1);
+		}
+		/* XXX no maxcpu check */
+		bucket_map[b] = c;
+	}
+	return (0);
+}
+
 int
 main(int argc, char *argv[])
 {
 	int i;
-	struct thr_setup ts[8];
-	int ncpu = 4;		/* XXX hard-coded for now */
-	int nbuckets = 8;	/* XXX hard-coded for now */
+	struct thr_setup *ts;
+	int ncpu;
+	int nbuckets;
+	int *bucket_map;
 
-	bzero(ts, sizeof(ts));
+	ncpu = rss_getsysctlint("net.inet.rss.ncpus");
+	if (ncpu < 0) {
+		fprintf(stderr, "Couldn't read net.inet.rss.ncpus\n");
+		exit(127);
+	}
+
+	nbuckets = rss_getsysctlint("net.inet.rss.buckets");
+	if (nbuckets < 0) {
+		fprintf(stderr, "Couldn't read net.inet.rss.buckets\n");
+		exit(127);
+	}
+
+	/* Allocate enough threads - one per bucket */
+	ts = calloc(nbuckets, sizeof(*ts));
+	if (ts == NULL)
+		err(127, "calloc");
+
+	/* And the bucket map */
+	bucket_map = calloc(nbuckets, sizeof(int));
+	if (bucket_map == NULL)
+		err(127, "calloc");
+
+	if (rss_getbucketmap(bucket_map, nbuckets) < 0) {
+		fprintf(stderr, "Couldn't read net.inet.rss.bucket_mapping");
+		exit(127);
+	}
+
 	for (i = 0; i < nbuckets; i++) {
 		ts[i].tid = i;
 		ts[i].rss_bucket = i;
-		/* XXX TODO: need to ask RSS for the bucket -> cpuid matching */
-		ts[i].cpuid = i % ncpu;
+		ts[i].cpuid = bucket_map[i];
+		printf("starting: tid=%d, rss_bucket=%d, cpuid=%d\n",
+		    ts[i].tid,
+		    ts[i].rss_bucket,
+		    ts[i].cpuid);
 		(void) pthread_create(&ts[i].thr, NULL, srv_thr, &ts[i]);
 	}
 
