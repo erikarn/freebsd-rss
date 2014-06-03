@@ -4,6 +4,7 @@
 #include <string.h>
 #include <err.h>
 #include <fcntl.h>
+#include <signal.h>
 
 #include <pthread.h>
 #include <pthread_np.h>
@@ -188,6 +189,7 @@ main(int argc, char *argv[])
 	int nbuckets;
 	int base_cpu;
 	int *bucket_map;
+	struct sigaction sa;
 
 	ncpu = rss_getsysctlint("net.inet.rss.ncpus");
 	if (ncpu < 0) {
@@ -230,6 +232,12 @@ main(int argc, char *argv[])
 	event_enable_debug_mode();
 	evthread_use_pthreads();
 	evthread_enable_lock_debugging();
+
+	/* Disable SIGPIPE */
+	sa.sa_handler = SIG_IGN;
+	sa.sa_flags = 0;
+	if (sigemptyset(&sa.sa_mask) == -1 || sigaction(SIGPIPE, &sa, 0) == -1)
+		perror("failed to ignore SIGPIPE; sigaction");
 
 	for (i = 0; i < nbuckets; i++) {
 		th[i].tid = i;
