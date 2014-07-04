@@ -35,14 +35,25 @@ struct http_srv_thread {
 };
 
 static void
+thr_http_free_cb(const void *data, size_t datalen, void *extra)
+{
+
+	free((void *)data);
+}
+
+static void
 thr_http_gen_cb(struct evhttp_request *req, void *cbdata)
 {
 	struct http_srv_thread *th = cbdata;
 	struct evbuffer *evb;
+	char *buf;
+
+	buf = malloc(1024);
 
 	/* Just return 200 OK with some data for now */
 	evb = evbuffer_new();
 	evbuffer_add_printf(evb, "OK\r\n");
+	evbuffer_add_reference(evb, buf, 1024, thr_http_free_cb, NULL);
 	evhttp_send_reply(req, HTTP_OK, "OK", evb);
 	/*
 	 * evhttp_send_reply() -> evhttp_send() will copy the evbuffer data
@@ -229,9 +240,9 @@ main(int argc, char *argv[])
 		exit(127);
 	}
 
-	event_enable_debug_mode();
+//	event_enable_debug_mode();
 	evthread_use_pthreads();
-	evthread_enable_lock_debugging();
+//	evthread_enable_lock_debugging();
 
 	/* Disable SIGPIPE */
 	sa.sa_handler = SIG_IGN;
