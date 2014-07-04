@@ -8,12 +8,6 @@
 
 #include <sys/sysctl.h>
 
-/* XXX until these are in freebsd-head */
-#define	IP_BINDMULTI 25
-#define IP_RSS_LISTEN_BUCKET 26
-#define IP_RSSCPUID 71
-#define IP_RSSBUCKETID 72
-
 int
 rss_getsysctlint(const char *s)
 {
