@@ -2,8 +2,11 @@
 #include <string.h>
 #include <stdlib.h>
 #include <sys/types.h>
+#include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netdb.h>
+#include <err.h>
 
 #define	RSS_KEYSIZE 40
 
@@ -62,19 +65,107 @@ rss_hash_ip4_4tuple(struct in_addr src, u_short srcport, struct in_addr dst,
 	return (toeplitz_hash(sizeof(rss_key), rss_key, datalen, data));
 }
 
+/*
+ * Hash an IPv6 4-tuple.
+ */
+uint32_t
+rss_hash_ip6_4tuple(struct in6_addr src, u_short srcport,
+    struct in6_addr dst, u_short dstport)
+{
+        uint8_t data[sizeof(src) + sizeof(dst) + sizeof(srcport) +
+            sizeof(dstport)];
+        u_int datalen;
+
+        datalen = 0;
+        bcopy(&src, &data[datalen], sizeof(src));
+        datalen += sizeof(src);
+        bcopy(&dst, &data[datalen], sizeof(dst));
+        datalen += sizeof(dst);
+        bcopy(&srcport, &data[datalen], sizeof(srcport));
+        datalen += sizeof(srcport);
+        bcopy(&dstport, &data[datalen], sizeof(dstport));
+        datalen += sizeof(dstport);
+        return (toeplitz_hash(sizeof(rss_key), rss_key, datalen, data));
+}
+
 int
 main(int argc, char *argv[])
 {
 	struct in_addr src, dst;
+	struct in6_addr src6, dst6;
+	int af_family;
 	u_short srcport, dstport;
+	struct addrinfo *ai, a;
+	int r;
 
+	/* Lookup */
+	bzero(&a, sizeof(a));
+	a.ai_flags = AI_NUMERICHOST;
+	a.ai_family = AF_UNSPEC;
+
+	r = getaddrinfo(argv[1], NULL, &a, &ai);
+	if (r < 0) {
+		err(1, "%s: getaddrinfo(src)", argv[0]);
+	}
+
+	if (ai == NULL) {
+		fprintf(stderr, "%s: src (%s) couldn't be decoded!\n", argv[0], argv[1]);
+		exit(1);
+	}
+
+	af_family = -1;
+	if (ai->ai_family == AF_INET) {
+		af_family = AF_INET;
+		printf("src=ipv4\n");
+		src = ((struct sockaddr_in *) ai->ai_addr)->sin_addr;
+	} else if (ai->ai_family == AF_INET6) {
+		af_family = AF_INET6;
+		printf("src=ipv6\n");
+		src6 = ((struct sockaddr_in6 *) ai->ai_addr)->sin6_addr;
+	} else {
+		fprintf(stderr, "%s: src (%s) isn't ipv4 or ipv6!\n", argv[0], argv[1]);
+	}
+
+	srcport = htons(atoi(argv[2]));
+
+	r = getaddrinfo(argv[3], NULL, &a, &ai);
+	if (r < 0) {
+		err(1, "%s: getaddrinfo(dst)", argv[0]);
+	}
+
+	if (ai == NULL) {
+		fprintf(stderr, "%s: dst (%s) couldn't be decoded!\n", argv[0], argv[3]);
+		exit(1);
+	}
+
+	/* XXX should check that this matches src type */
+	if (ai->ai_family == AF_INET) {
+		dst = ((struct sockaddr_in *) ai->ai_addr)->sin_addr;
+	} else if (ai->ai_family == AF_INET6) {
+		af_family = AF_INET6;
+		dst6 = ((struct sockaddr_in6 *) ai->ai_addr)->sin6_addr;
+	} else {
+		fprintf(stderr, "%s: dst (%s) isn't ipv4 or ipv6!\n", argv[0], argv[3]);
+	}
+
+	dstport = htons(atoi(argv[4]));
+
+	if (af_family == AF_INET) {
+		printf("(v4) hash: 0x%08x\n",
+		    rss_hash_ip4_4tuple(src, srcport, dst, dstport));
+	} else if (af_family == AF_INET6) {
+		printf("(v6) hash: 0x%08x\n",
+		    rss_hash_ip6_4tuple(src6, srcport, dst6, dstport));
+	}
+#if 0
+	/* IPv4 */
 	(void) inet_aton(argv[1], &src);
 	srcport = htons(atoi(argv[2]));
 	(void) inet_aton(argv[3], &dst);
-	dstport = htons(atoi(argv[4]));
 
 	printf("hash: 0x%08x\n",
 	    rss_hash_ip4_4tuple(src, srcport, dst, dstport));
+#endif
 
 	exit (0);
 }
