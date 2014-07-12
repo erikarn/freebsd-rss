@@ -2,8 +2,8 @@ PROG=rss-http
 
 SRCS=http.c rss.c
 
-CFLAGS+=-I/usr/local/include
-LDFLAGS+=-L/usr/local/lib/event2
+CFLAGS+=-I/home/adrian/local/include
+LDFLAGS+=-L/home/adrian/local/lib/
 LDADD=-lpthread -levent -levent_pthreads
 
 NO_MAN=1

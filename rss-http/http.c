@@ -29,7 +29,7 @@ struct http_srv_thread {
 	int tid;
 	int rss_bucket;
 	int cpuid;
-	int s;
+	int s4, s6;
 	struct event_base *b;
 	struct evhttp *h;
 };
@@ -62,75 +62,70 @@ thr_http_gen_cb(struct evhttp_request *req, void *cbdata)
 	evbuffer_free(evb);
 }
 
-static void *
-thr_http_init(void *arg)
+static int
+thr_sock_set_bindmulti(int fd, int af_family, int val)
 {
-	struct http_srv_thread *th = arg;
 	int opt;
 	socklen_t optlen;
-	cpuset_t cp;
 	int retval;
-	struct sockaddr_in sa;
 
-	/* thread pin for RSS */
-        CPU_ZERO(&cp);
-        CPU_SET(th->cpuid, &cp);
+	/* Set bindmulti */
+	opt = val;
+	optlen = sizeof(opt);
+	retval = setsockopt(fd,
+	    af_family == AF_INET ? IPPROTO_IP : IPPROTO_IPV6,
+	    af_family == AF_INET ? IP_BINDMULTI : IPV6_BINDMULTI,
+	    &opt,
+	    optlen);
+	if (retval < 0) {
+		warn("%s: setsockopt(IP_BINDMULTI)", __func__);
+		return (-1);
+	}
+	return (0);
+}
 
-        if (pthread_setaffinity_np(th->thr, sizeof(cpuset_t), &cp) != 0)
-                warn("pthread_setaffinity_np (id %d)", th->tid);
+static int
+thr_sock_set_rss_bucket(int fd, int af_family, int rss_bucket)
+{
+	int opt;
+	socklen_t optlen;
+	int retval;
 
-	printf("[%d] th=%p\n", th->tid, th);
+	/* Set RSS bucket */
+	opt = rss_bucket;
+	optlen = sizeof(opt);
+	retval = setsockopt(fd,
+	    af_family == AF_INET ? IPPROTO_IP : IPPROTO_IPV6,
+	    af_family == AF_INET ? IP_RSS_LISTEN_BUCKET : IPV6_RSS_LISTEN_BUCKET,
+	    &opt,
+	    optlen);
+	if (retval < 0) {
+		warn("%s: setsockopt(IP_RSS_LISTEN_BUCKET)", __func__);
+		return (-1);
+	}
+	return (0);
+}
 
-	th->b = event_base_new();
-	/* XXX error */
-	th->h = evhttp_new(th->b);
-	/* XXX error */
+static int
+thr_sock_set_reuseaddr(int fd, int reuse_addr)
+{
+	int opt;
+	socklen_t optlen;
+	int retval;
 
-	/* Hand-craft the socket bits */
-	th->s = socket(PF_INET, SOCK_STREAM, 0);
-	/* XXX error */
-
-        /* Set bindmulti */
-        opt = 1;
-        optlen = sizeof(opt);
-        retval = setsockopt(th->s, IPPROTO_IP,
-            IP_BINDMULTI,
-            &opt,
-            optlen);
-        if (retval < 0) {
-                warn("%s: setsockopt(IP_BINDMULTI)", __func__);
-                close(th->s);
-                return (NULL);
-        }
-
-#if 1
-        /* Set RSS bucket */
-        printf("thr %d: bucket %d\n", th->tid, th->rss_bucket);
-        opt = th->rss_bucket;
-        optlen = sizeof(opt);
-        retval = setsockopt(th->s, IPPROTO_IP,
-            IP_RSS_LISTEN_BUCKET,
-            &opt,
-            optlen);
-        if (retval < 0) {
-                warn("%s: setsockopt(IP_RSS_LISTEN_BUCKET)", __func__);
-                close(th->s);
-                return (NULL);
-        }
-#endif
-
-        /* reuseaddr/reuseport */
-        opt = 1;
-        optlen = sizeof(opt);
-        retval = setsockopt(th->s, SOL_SOCKET,
-            SO_REUSEPORT,
-            &opt,
-            optlen);
-        if (retval < 0) {
-                warn("%s: setsockopt(SO_REUSEPORT)", __func__);
-                close(th->s);
-                return (NULL);
-        }
+	/* reuseaddr/reuseport */
+	opt = reuse_addr;
+	optlen = sizeof(opt);
+	retval = setsockopt(fd, SOL_SOCKET,
+	    SO_REUSEPORT,
+	    &opt,
+	    optlen);
+	if (retval < 0) {
+		warn("%s: setsockopt(SO_REUSEPORT)", __func__);
+		return (-1);
+	}
+	return (0);
+}
 
 #if 0
         /* reuseaddr/reuseport */
@@ -147,36 +142,184 @@ thr_http_init(void *arg)
         }
 #endif
 
-        /* Bind */
-        bzero(&sa, sizeof(sa));
-        sa.sin_family = AF_INET;
-        sa.sin_port = htons(8080);
-        sa.sin_addr.s_addr = INADDR_ANY;
+/*
+ * Setup the RSS state for a listen socket.
+ *
+ * Call after socket creation, before bind() and listen().
+ */
+static int
+thr_rss_listen_sock_setup(int fd, int af_family, int rss_bucket)
+{
 
-        retval = bind(th->s, (struct sockaddr *) &sa, sizeof(sa));
-        if (retval < 0) {
-                warn("%s: bind()", __func__);
-                close(th->s);
-                return (NULL);
-        }
+	if (thr_sock_set_bindmulti(fd, af_family, 1) < 0) {
+		return (-1);
+	}
 
-        /* Listen */
-        retval = listen(th->s, -1);
-        if (retval < 0) {
-                warn("%s: listen()", __func__);
-                close(th->s);
-                return (NULL);
-        }
+	if (thr_sock_set_rss_bucket(fd, af_family, rss_bucket) < 0) {
+		return (-1);
+	}
+
+	if (thr_sock_set_reuseaddr(fd, 1) < 0) {
+		return (-1);
+	}
+
+	return (0);
+}
+
+/*
+ * IPv4 RSS listen socket creation - ipv4.
+ */
+static int
+thr_rss_listen_sock_create_ipv4(int rss_bucket)
+{
+	int fd;
+	struct sockaddr_in sa4;
+	int opt;
+	int retval;
+
+	/* IPv4 */
+	fd = socket(PF_INET, SOCK_STREAM, 0);
+	if (fd < 0) {
+		warn("%s: socket()", __func__);
+		goto error;
+	}
+
+	if (thr_rss_listen_sock_setup(fd, AF_INET, rss_bucket) < 0) {
+		goto error;
+	}
+
+	/* Bind */
+	bzero(&sa4, sizeof(sa4));
+	sa4.sin_family = AF_INET;
+	sa4.sin_port = htons(8080);
+	sa4.sin_addr.s_addr = INADDR_ANY;
+
+	retval = bind(fd, (struct sockaddr *) &sa4, sizeof(sa4));
+	if (retval < 0) {
+		warn("%s: bind()", __func__);
+		goto error;
+	}
+
+	/* Listen */
+	retval = listen(fd, -1);
+	if (retval < 0) {
+		warn("%s: listen()", __func__);
+		goto error;
+	}
 
 	/* Dont block */
-	if ((opt = fcntl(th->s, F_GETFL, 0)) < 0
-	    || fcntl(th->s, F_SETFL, opt | O_NONBLOCK) < 0) {
+	if ((opt = fcntl(fd, F_GETFL, 0)) < 0
+	    || fcntl(fd, F_SETFL, opt | O_NONBLOCK) < 0) {
 		warn("%s: fcntl(O_NONBLOCK)\n", __func__);
-		return (NULL);
+		goto error;
+	}
+
+	/* Done */
+	return (fd);
+error:
+	close(fd);
+	return (-1);
+}
+
+/*
+ * IPv6 RSS listen socket creation.
+ */
+static int
+thr_rss_listen_sock_create_ipv6(int rss_bucket)
+{
+	int fd;
+	struct sockaddr_in6 sa6;
+	int opt;
+	int retval;
+
+	/* IPv6 */
+	fd = socket(PF_INET6, SOCK_STREAM, 0);
+	if (fd < 0) {
+		warn("%s: socket()", __func__);
+		goto error;
+	}
+
+	if (thr_rss_listen_sock_setup(fd, AF_INET6, rss_bucket) < 0) {
+		goto error;
+	}
+
+	/* Bind */
+	bzero(&sa6, sizeof(sa6));
+	sa6.sin6_family = AF_INET6;
+	sa6.sin6_port = htons(8080);
+	sa6.sin6_addr = in6addr_any;
+
+	retval = bind(fd, (struct sockaddr *) &sa6, sizeof(sa6));
+	if (retval < 0) {
+		warn("%s: bind()", __func__);
+		goto error;
+	}
+
+	/* Listen */
+	retval = listen(fd, -1);
+	if (retval < 0) {
+		warn("%s: listen()", __func__);
+		goto error;
+	}
+
+	/* Dont block */
+	if ((opt = fcntl(fd, F_GETFL, 0)) < 0
+	    || fcntl(fd, F_SETFL, opt | O_NONBLOCK) < 0) {
+		warn("%s: fcntl(O_NONBLOCK)\n", __func__);
+		goto error;
+	}
+
+	/* Done */
+	return (fd);
+error:
+	close(fd);
+	return (-1);
+}
+
+static void *
+thr_http_init(void *arg)
+{
+	struct http_srv_thread *th = arg;
+	int opt;
+	socklen_t optlen;
+	cpuset_t cp;
+	int retval;
+	struct sockaddr_in6 sa6;
+	char buf[128];
+
+	/* thread pin for RSS */
+	CPU_ZERO(&cp);
+	CPU_SET(th->cpuid, &cp);
+
+	if (pthread_setaffinity_np(th->thr, sizeof(cpuset_t), &cp) != 0)
+		warn("pthread_setaffinity_np (id %d)", th->tid);
+
+	printf("[%d] th=%p\n", th->tid, th);
+	snprintf(buf, 128, "(bucket %d)", th->rss_bucket);
+	(void) pthread_set_name_np(th->thr, buf);
+
+	th->b = event_base_new();
+	th->h = evhttp_new(th->b);
+	th->s4 = -1;
+	th->s6 = -1;
+
+	/* IPv4 socket */
+	th->s4 = thr_rss_listen_sock_create_ipv4(th->rss_bucket);
+	if (th->s4 < 0) {
+		fprintf(stderr, "%s: ipv4 listen socket creation failed!\n", __func__);
+	}
+
+	/* IPv6 socket */
+	th->s6 = thr_rss_listen_sock_create_ipv6(th->rss_bucket);
+	if (th->s6 < 0) {
+		fprintf(stderr, "%s: ipv6 listen socket creation failed!\n", __func__);
 	}
 
 	/* Hand it to libevent */
-	(void) evhttp_accept_socket(th->h, th->s);
+	if (th->s4 != -1)
+		(void) evhttp_accept_socket(th->h, th->s4);
+	if (th->s6 != -1)
+		(void) evhttp_accept_socket(th->h, th->s6);
 
 	/* Default dispatch */
 	(void) evhttp_set_gencb(th->h, thr_http_gen_cb, th);
@@ -187,6 +330,13 @@ thr_http_init(void *arg)
 		ret = event_base_dispatch(th->b);
 		printf("%s [%d]: event_base_dispatch() returned %d\n", __func__, th->tid, ret);
 	}
+
+finish:
+	/* XXX wrap up http state? sockets? */
+	if (th->s4 != -1)
+		close(th->s4);
+	if (th->s6 != -1)
+		close(th->s6);
 	printf("%s [%d]: done\n", __func__, th->tid);
 	return (NULL);
 }
