@@ -30,7 +30,7 @@ main(int argc, const char *argv[])
 		err(1, "socket");
 
 	r = inet_aton(host, &addr);
-	if (r != 0)
+	if (r < 0)
 		err(1, "inet_aton");
 
 	/* Local bind */
@@ -57,9 +57,10 @@ main(int argc, const char *argv[])
 	/* Loop sending */
 	while (1) {
 		r = sendto(fd, buf, 2048, 0, (struct sockaddr *) &sin, sizeof(sin));
-		if (r < 0)
+		if (r < 0) {
 			warn("%s: sendto", __func__);
 			break;
+		}
 	}
 
 	exit(0);
