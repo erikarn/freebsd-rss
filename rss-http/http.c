@@ -22,7 +22,7 @@
 #include <event2/http.h>
 #include <event2/thread.h>
 
-#include "rss.h"
+#include "librss.h"
 
 struct http_srv_thread {
 	pthread_t thr;
@@ -60,50 +60,6 @@ thr_http_gen_cb(struct evhttp_request *req, void *cbdata)
 	 * into its own private data buffer.
 	 */
 	evbuffer_free(evb);
-}
-
-static int
-thr_sock_set_bindmulti(int fd, int af_family, int val)
-{
-	int opt;
-	socklen_t optlen;
-	int retval;
-
-	/* Set bindmulti */
-	opt = val;
-	optlen = sizeof(opt);
-	retval = setsockopt(fd,
-	    af_family == AF_INET ? IPPROTO_IP : IPPROTO_IPV6,
-	    af_family == AF_INET ? IP_BINDMULTI : IPV6_BINDMULTI,
-	    &opt,
-	    optlen);
-	if (retval < 0) {
-		warn("%s: setsockopt(IP_BINDMULTI)", __func__);
-		return (-1);
-	}
-	return (0);
-}
-
-static int
-thr_sock_set_rss_bucket(int fd, int af_family, int rss_bucket)
-{
-	int opt;
-	socklen_t optlen;
-	int retval;
-
-	/* Set RSS bucket */
-	opt = rss_bucket;
-	optlen = sizeof(opt);
-	retval = setsockopt(fd,
-	    af_family == AF_INET ? IPPROTO_IP : IPPROTO_IPV6,
-	    af_family == AF_INET ? IP_RSS_LISTEN_BUCKET : IPV6_RSS_LISTEN_BUCKET,
-	    &opt,
-	    optlen);
-	if (retval < 0) {
-		warn("%s: setsockopt(IP_RSS_LISTEN_BUCKET)", __func__);
-		return (-1);
-	}
-	return (0);
 }
 
 static int
@@ -151,11 +107,11 @@ static int
 thr_rss_listen_sock_setup(int fd, int af_family, int rss_bucket)
 {
 
-	if (thr_sock_set_bindmulti(fd, af_family, 1) < 0) {
+	if (rss_sock_set_bindmulti(fd, af_family, 1) < 0) {
 		return (-1);
 	}
 
-	if (thr_sock_set_rss_bucket(fd, af_family, rss_bucket) < 0) {
+	if (rss_sock_set_rss_bucket(fd, af_family, rss_bucket) < 0) {
 		return (-1);
 	}
 

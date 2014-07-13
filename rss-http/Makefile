@@ -1,10 +1,17 @@
 PROG=rss-http
 
-SRCS=http.c rss.c
+SRCS=http.c
+LDADD=-lpthread
 
+# libevent
 CFLAGS+=-I/home/adrian/local/include
 LDFLAGS+=-L/home/adrian/local/lib/
-LDADD=-lpthread -levent -levent_pthreads
+LDADD+= -levent -levent_pthreads
+
+# librss
+CFLAGS+= -I${.CURDIR}/../librss/
+LDFLAGS+= -L${.OBJDIR}/../librss/
+LDADD+=-lrss
 
 NO_MAN=1
 
