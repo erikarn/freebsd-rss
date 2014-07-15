@@ -203,6 +203,38 @@ error:
 #endif
 
 static void
+thr_parse_msghdr(struct msghdr *m)
+{
+	const struct cmsghdr *c;
+	uint32_t flowid;
+	uint32_t flowtype;
+	uint32_t flow_rssbucket;
+
+	for (c = CMSG_FIRSTHDR(m); c != NULL; c = CMSG_NXTHDR(m, c)) {
+#if 0
+		printf("  msghdr level: %d\n", c->cmsg_level);
+		printf("  msghdr type: %d\n", c->cmsg_type);
+		printf("  msghdr len: %d\n", c->cmsg_len);
+#endif
+		if (c->cmsg_level != IPPROTO_IP)
+			continue;
+		switch (c->cmsg_type) {
+			case IP_FLOWID:
+				flowid = *(uint32_t *) CMSG_DATA(c);
+				break;
+			case IP_FLOWTYPE:
+				flowtype = *(uint32_t *) CMSG_DATA(c);
+				break;
+			case IP_RSSBUCKETID:
+				flow_rssbucket = *(uint32_t *) CMSG_DATA(c);
+				break;
+		}
+	}
+	printf("  flowid=0x%08x; flowtype=%d; bucket=%d\n", flowid, flowtype, flow_rssbucket);
+}
+
+
+static void
 thr_udp_ev_read(int fd, short what, void *arg)
 {
 	struct udp_srv_thread *th = arg;
@@ -211,19 +243,40 @@ thr_udp_ev_read(int fd, short what, void *arg)
 	ssize_t ret;
 	int i = 0;
 
-	fprintf(stderr, "%s [%p]: called\n", __func__, arg);
+	/* for the msghdr contents */
+	struct msghdr m;
+	char msgbuf[2048];
+	int msglen;
+
+	struct iovec iov[1];
+
+	iov[0].iov_base = buf;
+	iov[0].iov_len = 2048;
+
+	m.msg_name = NULL;
+	m.msg_namelen = 0;
+	m.msg_iov = iov;
+	m.msg_iovlen = 1;
+	m.msg_control = &msgbuf;
+	m.msg_controllen = 2048;
+	m.msg_flags = 0;
 
 	/* Loop read UDP frames until EWOULDBLOCK */
 	while (1) {
-		ret = recv(fd, buf, 2048, 0);
+		ret = recvmsg(fd, &m, 0);
+
 		if (ret < 0) {
 			if (errno != EWOULDBLOCK)
 				warn("%s: recv", __func__);
 			break;
 		}
+		printf("  recv: len=%d, controllen=%d\n",
+		    (int) ret,
+		    (int) m.msg_controllen);
+		thr_parse_msghdr(&m);
 		i++;
 	}
-	fprintf(stderr, "%s [%p]: finished; %d frames received\n", __func__, arg, i);
+	fprintf(stderr, "%s [%p] [%d]: finished; %d frames received\n", __func__, arg, th->rss_bucket, i);
 
 }
 
