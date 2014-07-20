@@ -29,7 +29,9 @@ struct udp_srv_thread {
 	int rss_bucket;
 	int cpuid;
 	int s4, s6;
+	uint64_t recv_pkts;
 	struct event_base *b;
+	struct event *ev_timer;
 	struct event *ev_read, *ev_write;
 };
 
@@ -230,7 +232,29 @@ thr_parse_msghdr(struct msghdr *m)
 				break;
 		}
 	}
+#if 0
 	printf("  flowid=0x%08x; flowtype=%d; bucket=%d\n", flowid, flowtype, flow_rssbucket);
+#endif
+}
+
+static void
+thr_ev_timer(int fd, short what, void *arg)
+{
+	struct udp_srv_thread *th = arg;
+	struct timeval tv;
+
+	if (th->recv_pkts != 0) {
+		printf("%s: thr=%d, pkts_received=%llu\n",
+		    __func__,
+		    th->rss_bucket,
+		    (unsigned long long) th->recv_pkts);
+	}
+
+	th->recv_pkts = 0;
+
+	tv.tv_sec = 1;
+	tv.tv_usec = 0;
+	evtimer_add(th->ev_timer, &tv);
 }
 
 
@@ -261,8 +285,8 @@ thr_udp_ev_read(int fd, short what, void *arg)
 	m.msg_controllen = 2048;
 	m.msg_flags = 0;
 
-	/* Loop read UDP frames until EWOULDBLOCK */
-	while (1) {
+	/* Loop read UDP frames until EWOULDBLOCK or 1024 frames */
+	while (i < 1024) {
 		ret = recvmsg(fd, &m, 0);
 
 		if (ret < 0) {
@@ -270,14 +294,18 @@ thr_udp_ev_read(int fd, short what, void *arg)
 				warn("%s: recv", __func__);
 			break;
 		}
+#if 0
 		printf("  recv: len=%d, controllen=%d\n",
 		    (int) ret,
 		    (int) m.msg_controllen);
+#endif
 		thr_parse_msghdr(&m);
 		i++;
+		th->recv_pkts++;
 	}
+#if 0
 	fprintf(stderr, "%s [%p] [%d]: finished; %d frames received\n", __func__, arg, th->rss_bucket, i);
-
+#endif
 }
 
 static void *
@@ -289,6 +317,7 @@ thr_udp_srv_init(void *arg)
 	cpuset_t cp;
 	int retval;
 	char buf[128];
+	struct timeval tv;
 
 	/* thread pin for RSS */
 	CPU_ZERO(&cp);
@@ -318,6 +347,12 @@ thr_udp_srv_init(void *arg)
 		fprintf(stderr, "%s: ipv6 listen socket creation failed!\n", __func__);
 	}
 #endif
+
+
+	th->ev_timer = evtimer_new(th->b, thr_ev_timer, th);
+	tv.tv_sec = 1;
+	tv.tv_usec = 0;
+	evtimer_add(th->ev_timer, &tv);
 
 	/* Create read and write readiness events */
 	th->ev_read = event_new(th->b, th->s4, EV_READ | EV_PERSIST,
