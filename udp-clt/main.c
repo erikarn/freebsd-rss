@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/errno.h>
@@ -79,7 +80,7 @@ main(int argc, const char *argv[])
 	int i = 0;
 	struct clt *c;
 	struct event_base *b;
-
+	int opt;
 
 	b = event_base_new();
 	if (b == NULL)
@@ -103,6 +104,13 @@ main(int argc, const char *argv[])
 	c->fd = socket(PF_INET, SOCK_DGRAM, 0);
 	if (c->fd < 0)
 		err(1, "socket");
+
+	/* Dont block */
+	if ((opt = fcntl(c->fd, F_GETFL, 0)) < 0
+	    || fcntl(c->fd, F_SETFL, opt | O_NONBLOCK) < 0) {
+		err(1, "fcntl");
+	}
+
 
 	r = inet_aton(c->lcl_host, &c->lcl_addr);
 	if (r < 0)
