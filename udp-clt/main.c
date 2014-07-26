@@ -8,80 +8,136 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+#include <event2/event.h>
+#include <event2/thread.h>
+#include <event2/util.h>
+
 #include <err.h>
 
+struct clt {
+	int fd;
+	struct {
+		char *buf;
+		int size;
+	} rb, wb;
+	const char *lcl_host, *rem_host;
+	struct sockaddr_in lcl_sin;
+	struct in_addr lcl_addr;
+	struct sockaddr_in rem_sin;
+	struct in_addr rem_addr;
+	int cnt, cur_cnt;
+	int port;
+	struct event *ev_read, *ev_write;
+};
+
+void
+write_pkt(int fd, short what, void *arg)
+{
+	struct clt *c = arg;
+	int i;
+	int len;
+	int r;
+
+	for (i = 0; i < 128; i++) {
+		len = random() % 2048;
+		len = 510;
+
+		r = sendto(c->fd, c->wb.buf, len, 0,
+		    (struct sockaddr *) &c->rem_sin, sizeof(c->rem_sin));
+		if (r < 0) {
+			if (errno == EWOULDBLOCK || errno == ENOBUFS) {
+				/* XXX should pause */
+				break;
+			}
+			warn("%s: sendto", __func__);
+		}
+		c->cur_cnt ++;
+		if (c->cur_cnt >= c->cnt)
+			exit(1);
+	}
+}
+
+void
+read_pkt(int fd, short what, void *arg)
+{
+	struct clt *c = arg;
+	int cnt;
+	int r;
+	int i;
+
+	for (i = 0; i < 128; i++) {
+		r = read(c->fd, c->rb.buf, c->rb.size);
+		if (r <= 0)
+			break;
+	}
+}
 
 int
 main(int argc, const char *argv[])
 {
-	const char *lcl_host, *rem_host;
-	int port;
-	struct sockaddr_in sin;
 	int r;
-	char buf[16384];
-	int fd;
-	struct in_addr lcl_addr;
-	struct in_addr rem_addr;
 	int i = 0;
-	int cnt;
+	struct clt *c;
+	struct event_base *b;
+
+
+	b = event_base_new();
+	if (b == NULL)
+		exit(128);
+
+	c = calloc(1, sizeof(*c));
+	if (c == NULL)
+		err(1, "calloc");
+	c->rb.buf = malloc(16384);
+	c->rb.size = 16384;
+	c->wb.buf = malloc(16384);
+	c->wb.size = 16384;
 
 	/* XXX validate args */
-	lcl_host = strdup(argv[1]);
-	rem_host = strdup(argv[2]);
-	port = atoi(argv[3]);
-	cnt = atoi(argv[4]);
+	c->lcl_host = strdup(argv[1]);
+	c->rem_host = strdup(argv[2]);
+	c->port = atoi(argv[3]);
+	c->cnt = atoi(argv[4]);
 
-	fd = socket(PF_INET, SOCK_DGRAM, 0);
-	if (fd < 0)
+	/* Socket setup */
+	c->fd = socket(PF_INET, SOCK_DGRAM, 0);
+	if (c->fd < 0)
 		err(1, "socket");
 
-	r = inet_aton(lcl_host, &lcl_addr);
+	r = inet_aton(c->lcl_host, &c->lcl_addr);
 	if (r < 0)
 		err(1, "inet_aton");
-	r = inet_aton(rem_host, &rem_addr);
+	r = inet_aton(c->rem_host, &c->rem_addr);
 	if (r < 0)
 		err(1, "inet_aton");
 
 	/* Local bind */
-	bzero(&sin, sizeof(sin));
-	sin.sin_family = AF_INET;
-	sin.sin_port = 0;
-	sin.sin_addr = lcl_addr;
+	bzero(&c->lcl_sin, sizeof(c->lcl_sin));
+	c->lcl_sin.sin_family = AF_INET;
+	c->lcl_sin.sin_port = 0;
+	c->lcl_sin.sin_addr = c->lcl_addr;
 
-	r = bind(fd, (struct sockaddr *) &sin, sizeof(sin));
+	r = bind(c->fd, (struct sockaddr *) &c->lcl_sin, sizeof(c->lcl_sin));
 	if (r < 0)
 		err(1, "bind");
 
 	/* Remote bind */
-	bzero(&sin, sizeof(sin));
-	sin.sin_family = AF_INET;
-	sin.sin_port = htons(port);
-	sin.sin_addr = rem_addr;
+	bzero(&c->rem_sin, sizeof(c->rem_sin));
+	c->rem_sin.sin_family = AF_INET;
+	c->rem_sin.sin_port = htons(c->port);
+	c->rem_sin.sin_addr = c->rem_addr;
 
 	/* XXX randomize buf contents */
-	for (r = 0; r < sizeof(buf); r++) {
-		buf[r] = r;
+	for (r = 0; r < c->wb.size; r++) {
+		c->wb.buf[r] = r;
 	}
 
-	/* Loop sending */
-	while (1) {
-		int len;
+	c->ev_read = event_new(b, c->fd, EV_READ | EV_PERSIST, read_pkt, c);
+	c->ev_write = event_new(b, c->fd, EV_WRITE | EV_PERSIST, write_pkt, c);
+	event_add(c->ev_read, NULL);
+	event_add(c->ev_write, NULL);
 
-		len = random() % 2048;
-		len = 510;
-
-		r = sendto(fd, buf, len, 0, (struct sockaddr *) &sin, sizeof(sin));
-		if (r < 0) {
-			if (errno == EWOULDBLOCK || errno == ENOBUFS) {
-				usleep(10);
-				continue;
-			}
-			warn("%s: sendto", __func__);
-		}
-		i++;
-		if (i > cnt)
-			break;
-	}
+	(void) event_base_dispatch(b);
 
 	exit(0);
 }
