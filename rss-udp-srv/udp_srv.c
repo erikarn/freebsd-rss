@@ -30,6 +30,7 @@ struct udp_srv_thread {
 	int cpuid;
 	int s4, s6;
 	uint64_t recv_pkts;
+	uint64_t sent_pkts;
 	struct event_base *b;
 	struct event *ev_timer;
 	struct event *ev_read, *ev_write;
@@ -88,9 +89,11 @@ thr_rss_udp_listen_sock_setup(int fd, int af_family, int rss_bucket)
 		return (-1);
 	}
 
+#if 0
 	if (rss_sock_set_recvrss(fd, af_family, rss_bucket) < 0) {
 		return (-1);
 	}
+#endif
 
 	if (thr_sock_set_reuseaddr(fd, 1) < 0) {
 		return (-1);
@@ -243,14 +246,16 @@ thr_ev_timer(int fd, short what, void *arg)
 	struct udp_srv_thread *th = arg;
 	struct timeval tv;
 
-	if (th->recv_pkts != 0) {
-		printf("%s: thr=%d, pkts_received=%llu\n",
+	if (th->recv_pkts != 0 || th->sent_pkts != 0) {
+		printf("%s: thr=%d, pkts_received=%llu, packets_sent=%llu\n",
 		    __func__,
 		    th->rss_bucket,
-		    (unsigned long long) th->recv_pkts);
+		    (unsigned long long) th->recv_pkts,
+		    (unsigned long long) th->sent_pkts);
 	}
 
 	th->recv_pkts = 0;
+	th->sent_pkts = 0;
 
 	tv.tv_sec = 1;
 	tv.tv_usec = 0;
@@ -266,30 +271,41 @@ thr_udp_ev_read(int fd, short what, void *arg)
 	char buf[2048];
 	ssize_t ret;
 	int i = 0;
+	struct sockaddr_in sin;
+	socklen_t sin_len;
 
+#if 0
 	/* for the msghdr contents */
 	struct msghdr m;
 	char msgbuf[2048];
 	int msglen;
 
 	struct iovec iov[1];
-
-	iov[0].iov_base = buf;
-	iov[0].iov_len = 2048;
-
-	m.msg_name = NULL;
-	m.msg_namelen = 0;
-	m.msg_iov = iov;
-	m.msg_iovlen = 1;
-	m.msg_control = &msgbuf;
-	m.msg_controllen = 2048;
-	m.msg_flags = 0;
+#endif
 
 	/* Loop read UDP frames until EWOULDBLOCK or 1024 frames */
-	while (i < 1024) {
-		ret = recvmsg(fd, &m, 0);
+	while (i < 10240) {
 
-		if (ret < 0) {
+#if 0
+		iov[0].iov_base = buf;
+		iov[0].iov_len = 2048;
+
+		m.msg_name = NULL;
+		m.msg_namelen = 0;
+		m.msg_iov = iov;
+		m.msg_iovlen = 1;
+		m.msg_control = &msgbuf;
+		m.msg_controllen = 2048;
+		m.msg_flags = 0;
+
+		ret = recvmsg(fd, &m, 0);
+#endif
+		sin_len = sizeof(sin);
+		ret = recvfrom(fd, buf, 2048, MSG_DONTWAIT,
+		    (struct sockaddr *) &sin,
+		    &sin_len);
+
+		if (ret <= 0) {
 			if (errno != EWOULDBLOCK)
 				warn("%s: recv", __func__);
 			break;
@@ -298,10 +314,19 @@ thr_udp_ev_read(int fd, short what, void *arg)
 		printf("  recv: len=%d, controllen=%d\n",
 		    (int) ret,
 		    (int) m.msg_controllen);
-#endif
 		thr_parse_msghdr(&m);
+#endif
 		i++;
 		th->recv_pkts++;
+
+#if 1
+		ret = sendto(fd, buf, ret, 0,
+		    (struct sockaddr *) &sin,
+		    sin_len);
+		if (ret > 0) {
+			th->sent_pkts++;
+		}
+#endif
 	}
 #if 0
 	fprintf(stderr, "%s [%p] [%d]: finished; %d frames received\n", __func__, arg, th->rss_bucket, i);
