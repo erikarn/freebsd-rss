@@ -1,3 +1,4 @@
+.gitignore
 */librss/librss.c
 */rss-http/Makefile
 */rss-udp-srv/Makefile
