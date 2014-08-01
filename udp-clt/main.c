@@ -139,11 +139,6 @@ main(int argc, char **argv)
 	printf("remote ip: %s\n", c->rem_host);
 	printf("remote port: %d\n", c->port);
 	printf("total pcakets: %d\n", c->cnt);
-#if 0
-	if (argc == 0) {
-		printf("wrong \n");
-	}
-#endif
 
 	/* Socket setup */
 	c->fd = socket(PF_INET, SOCK_DGRAM, 0);
