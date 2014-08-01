@@ -1,4 +1,4 @@
-librss/librss.c
-rss-http/Makefile
-rss-udp-srv/Makefile
-dp-clt/Makefile
+*/librss/librss.c
+*/rss-http/Makefile
+*/rss-udp-srv/Makefile
+*/udp-clt/Makefile
