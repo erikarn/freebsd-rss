@@ -5,7 +5,7 @@ LDADD=-lpthread
 
 # libevent
 CFLAGS+=-I/home/adrian/local/include
-LDFLAGS+=-L/home/adrian/local/lib/
+LDFLAGS+=-L/home/adrian/local/lib/ -rpath /home/adrian/local/lib
 LDADD+= -levent -levent_pthreads
 
 # librss
