@@ -28,6 +28,7 @@ struct clt {
 	struct in_addr rem_addr;
 	int cnt, cur_cnt;
 	int port;
+	int pkt_size;
 	struct event *ev_read, *ev_write;
 };
 
@@ -40,8 +41,7 @@ write_pkt(int fd, short what, void *arg)
 	int r;
 
 	for (i = 0; i < 128; i++) {
-		len = random() % 2048;
-		len = 510;
+		len = c->pkt_size;
 
 		r = sendto(c->fd, c->wb.buf, len, 0,
 		    (struct sockaddr *) &c->rem_sin, sizeof(c->rem_sin));
@@ -67,7 +67,7 @@ read_pkt(int fd, short what, void *arg)
 	int i;
 
 	for (i = 0; i < 128; i++) {
-		r = read(c->fd, c->rb.buf, c->rb.size);
+		r = recv(c->fd, c->rb.buf, c->rb.size, MSG_DONTWAIT);
 		if (r <= 0)
 			break;
 	}
@@ -98,7 +98,8 @@ main(int argc, const char *argv[])
 	c->lcl_host = strdup(argv[1]);
 	c->rem_host = strdup(argv[2]);
 	c->port = atoi(argv[3]);
-	c->cnt = atoi(argv[4]);
+	c->pkt_size = atoi(argv[4]);
+	c->cnt = atoi(argv[5]);
 
 	/* Socket setup */
 	c->fd = socket(PF_INET, SOCK_DGRAM, 0);
