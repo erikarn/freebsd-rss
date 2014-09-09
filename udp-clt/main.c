@@ -21,13 +21,15 @@ struct clt {
 		char *buf;
 		int size;
 	} rb, wb;
-	const char *lcl_host, *rem_host;
-	struct sockaddr_in lcl_sin;
-	struct in_addr lcl_addr;
-	struct sockaddr_in rem_sin;
-	struct in_addr rem_addr;
-	int cnt, cur_cnt;
-	int port;
+	const char *lcl_host;		/* local IP (string) */
+	const char *rem_host;		/* remote IP (string) */
+	struct sockaddr_in lcl_sin;	/* local socket */
+	struct in_addr lcl_addr;	/* local IP */
+	struct sockaddr_in rem_sin;	/* remote socket */
+	struct in_addr rem_addr;	/* remote IP */
+	int cnt;			/* total packets to be sent */
+	int cur_cnt;			/* total packets sent by now */
+	int port;			/* remote port to bind to */
 	int pkt_size;
 	struct event *ev_read, *ev_write;
 };
@@ -73,14 +75,22 @@ read_pkt(int fd, short what, void *arg)
 	}
 }
 
+static void
+usage(void)
+{
+	fprintf(stderr,
+		"Usage: udp-ctl [-l local ip] [-r remote ip] [-p remote port] [-n numer of packets] [-s packet size]\n");
+	exit (1);
+}
+
 int
-main(int argc, const char *argv[])
+main(int argc, char **argv)
 {
 	int r;
 	int i = 0;
 	struct clt *c;
 	struct event_base *b;
-	int opt;
+	int opt, ch;
 
 	b = event_base_new();
 	if (b == NULL)
@@ -94,12 +104,46 @@ main(int argc, const char *argv[])
 	c->wb.buf = malloc(16384);
 	c->wb.size = 16384;
 
-	/* XXX validate args */
-	c->lcl_host = strdup(argv[1]);
-	c->rem_host = strdup(argv[2]);
-	c->port = atoi(argv[3]);
-	c->pkt_size = atoi(argv[4]);
-	c->cnt = atoi(argv[5]);
+	while ((ch = getopt(argc, argv, "l:r:p:n:s:")) != -1)
+		switch (ch) {
+		case 'l':
+			if (optarg)
+			    c->lcl_host = strdup(optarg);
+			break;
+		case 'r':
+			if (optarg)
+			    c->rem_host = strdup(optarg);
+			break;
+		case 'p':
+			if (optarg)
+			c->port = atoi(optarg);
+			break;
+		case 'n':
+			if (optarg)
+			    c->cnt = atoi(optarg);
+			if (c->cnt == 0)
+				usage();
+			break;
+		case 's':
+			if (optarg)
+				c->pkt_size = atoi(optarg);
+			break;
+		case '?':
+		default:
+			usage();
+		}
+	argc -= optind;
+	argv += optind;
+
+	if (c->lcl_host == NULL || c->rem_host == NULL ||
+	    c->port == 0 || c->cnt == 0 || c->pkt_size == 0)
+		usage();
+
+	printf("local ip: %s\n", c->lcl_host);
+	printf("remote ip: %s\n", c->rem_host);
+	printf("remote port: %d\n", c->port);
+	printf("total packets: %d\n", c->cnt);
+	printf("packet size: %d\n", c->pkt_size);
 
 	/* Socket setup */
 	c->fd = socket(PF_INET, SOCK_DGRAM, 0);
