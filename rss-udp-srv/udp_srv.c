@@ -16,6 +16,7 @@
 #include <sys/errno.h>
 
 #include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include <event2/event.h>
 #include <event2/thread.h>
@@ -29,6 +30,8 @@ struct udp_srv_thread {
 	int rss_bucket;
 	int cpuid;
 	int s4, s6;
+	struct in_addr v4_listen_addr;
+	int v4_listen_port;
 	uint64_t recv_pkts;
 	uint64_t sent_pkts;
 	struct event_base *b;
@@ -106,7 +109,8 @@ thr_rss_udp_listen_sock_setup(int fd, int af_family, int rss_bucket)
  * IPv4 RSS listen socket creation - ipv4.
  */
 static int
-thr_rss_listen_udp_sock_create_ipv4(int rss_bucket)
+thr_rss_listen_udp_sock_create_ipv4(int rss_bucket,
+    struct in_addr lcl_addr, int lcl_port)
 {
 	int fd;
 	struct sockaddr_in sa4;
@@ -127,8 +131,8 @@ thr_rss_listen_udp_sock_create_ipv4(int rss_bucket)
 	/* Bind */
 	bzero(&sa4, sizeof(sa4));
 	sa4.sin_family = AF_INET;
-	sa4.sin_port = htons(8080);
-	sa4.sin_addr.s_addr = INADDR_ANY;
+	sa4.sin_port = htons(lcl_port);
+	sa4.sin_addr = lcl_addr;
 
 	retval = bind(fd, (struct sockaddr *) &sa4, sizeof(sa4));
 	if (retval < 0) {
@@ -360,7 +364,7 @@ thr_udp_srv_init(void *arg)
 	th->s6 = -1;
 
 	/* IPv4 socket */
-	th->s4 = thr_rss_listen_udp_sock_create_ipv4(th->rss_bucket);
+	th->s4 = thr_rss_listen_udp_sock_create_ipv4(th->rss_bucket, th->v4_listen_addr, th->v4_listen_port);
 	if (th->s4 < 0) {
 		fprintf(stderr, "%s: ipv4 listen socket creation failed!\n", __func__);
 	}
@@ -413,6 +417,17 @@ main(int argc, char *argv[])
 	int base_cpu;
 	int *bucket_map;
 	struct sigaction sa;
+	struct in_addr lcl_addr;
+
+	if (argc < 2) {
+		printf("Usage: %s <local ipv4 port to bind to>\n",
+		    argv[0]);
+		exit(1);
+	}
+
+	lcl_addr.s_addr = INADDR_ANY;
+
+	(void) inet_aton(argv[1], &lcl_addr);
 
 	ncpu = rss_getsysctlint("net.inet.rss.ncpus");
 	if (ncpu < 0) {
@@ -466,6 +481,8 @@ main(int argc, char *argv[])
 		th[i].tid = i;
 		th[i].rss_bucket = i;
 		th[i].cpuid = bucket_map[i];
+		th[i].v4_listen_addr = lcl_addr;
+		th[i].v4_listen_port = 8080;
 		printf("starting: tid=%d, rss_bucket=%d, cpuid=%d\n",
 		    th[i].tid,
 		    th[i].rss_bucket,
