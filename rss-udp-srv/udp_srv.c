@@ -32,6 +32,7 @@ struct udp_srv_thread {
 	int s4, s6;
 	struct in_addr v4_listen_addr;
 	int v4_listen_port;
+	int do_response;
 	uint64_t recv_pkts;
 	uint64_t sent_pkts;
 	struct event_base *b;
@@ -323,12 +324,14 @@ thr_udp_ev_read(int fd, short what, void *arg)
 		i++;
 		th->recv_pkts++;
 
+		if (th->do_response) {
 #if 1
-		ret = sendto(fd, buf, ret, 0,
-		    (struct sockaddr *) &sin,
-		    sin_len);
-		if (ret > 0) {
-			th->sent_pkts++;
+			ret = sendto(fd, buf, ret, 0,
+			    (struct sockaddr *) &sin,
+			    sin_len);
+			if (ret > 0) {
+				th->sent_pkts++;
+			}
 		}
 #endif
 	}
@@ -418,16 +421,18 @@ main(int argc, char *argv[])
 	int *bucket_map;
 	struct sigaction sa;
 	struct in_addr lcl_addr;
+	int do_response;
 
-	if (argc < 2) {
-		printf("Usage: %s <local ipv4 port to bind to>\n",
+	if (argc < 3) {
+		printf("Usage: <1|0 - whether to respond or not to each UDP frame>  %s <local ipv4 port to bind to>\n",
 		    argv[0]);
 		exit(1);
 	}
 
 	lcl_addr.s_addr = INADDR_ANY;
 
-	(void) inet_aton(argv[1], &lcl_addr);
+	do_response = atoi(argv[1]);
+	(void) inet_aton(argv[2], &lcl_addr);
 
 	ncpu = rss_getsysctlint("net.inet.rss.ncpus");
 	if (ncpu < 0) {
@@ -483,6 +488,7 @@ main(int argc, char *argv[])
 		th[i].cpuid = bucket_map[i];
 		th[i].v4_listen_addr = lcl_addr;
 		th[i].v4_listen_port = 8080;
+		th[i].do_response = do_response;
 		printf("starting: tid=%d, rss_bucket=%d, cpuid=%d\n",
 		    th[i].tid,
 		    th[i].rss_bucket,
