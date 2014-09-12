@@ -4,8 +4,8 @@ SRCS=http.c
 LDADD=-lpthread
 
 # libevent
-CFLAGS+=-I/home/adrian/local/include
-LDFLAGS+=-L/home/adrian/local/lib/
+CFLAGS+=-I/usr/local/include
+LDFLAGS+=-L/usr/local/lib/
 LDADD+= -levent -levent_pthreads
 
 # librss

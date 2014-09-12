@@ -29,6 +29,6 @@
 
 .include <bsd.own.mk>
 
-SUBDIR=librss rss-http rss-udp-srv udp-clt
+SUBDIR=librss rss-hash rss-http rss-udp-srv udp-clt
 
 .include <bsd.subdir.mk>
