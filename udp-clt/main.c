@@ -55,7 +55,7 @@ write_pkt(int fd, short what, void *arg)
 			warn("%s: sendto", __func__);
 		}
 		c->cur_cnt ++;
-		if (c->cur_cnt >= c->cnt)
+		if (c->cnt != 0 && c->cur_cnt >= c->cnt)
 			exit(1);
 	}
 }
@@ -80,6 +80,7 @@ usage(void)
 {
 	fprintf(stderr,
 		"Usage: udp-ctl [-l local ip] [-r remote ip] [-p remote port] [-n numer of packets] [-s packet size]\n");
+	fprintf(stderr, "-n 0 == continuous send packets\n");
 	exit (1);
 }
 
@@ -104,6 +105,8 @@ main(int argc, char **argv)
 	c->wb.buf = malloc(16384);
 	c->wb.size = 16384;
 
+	c->cnt = -1;
+
 	while ((ch = getopt(argc, argv, "l:r:p:n:s:")) != -1)
 		switch (ch) {
 		case 'l':
@@ -121,7 +124,7 @@ main(int argc, char **argv)
 		case 'n':
 			if (optarg)
 			    c->cnt = atoi(optarg);
-			if (c->cnt == 0)
+			else
 				usage();
 			break;
 		case 's':
@@ -136,13 +139,16 @@ main(int argc, char **argv)
 	argv += optind;
 
 	if (c->lcl_host == NULL || c->rem_host == NULL ||
-	    c->port == 0 || c->cnt == 0 || c->pkt_size == 0)
+	    c->port == 0 || c->cnt == -1 || c->pkt_size == 0)
 		usage();
 
 	printf("local ip: %s\n", c->lcl_host);
 	printf("remote ip: %s\n", c->rem_host);
 	printf("remote port: %d\n", c->port);
-	printf("total packets: %d\n", c->cnt);
+	if (c->cnt == 0)
+		printf("total packets: continuous\n");
+	else
+		printf("total packets: %d\n", c->cnt);
 	printf("packet size: %d\n", c->pkt_size);
 
 	/* Socket setup */

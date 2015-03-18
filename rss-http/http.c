@@ -53,7 +53,7 @@ thr_http_gen_cb(struct evhttp_request *req, void *cbdata)
 	/* Just return 200 OK with some data for now */
 	evb = evbuffer_new();
 	evbuffer_add_printf(evb, "OK\r\n");
-	evbuffer_add_reference(evb, buf, 1024, thr_http_free_cb, NULL);
+	evbuffer_add_reference(evb, buf, 4, thr_http_free_cb, NULL);
 	evhttp_send_reply(req, HTTP_OK, "OK", evb);
 	/*
 	 * evhttp_send_reply() -> evhttp_send() will copy the evbuffer data
