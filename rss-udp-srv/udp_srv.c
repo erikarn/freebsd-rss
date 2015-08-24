@@ -170,7 +170,7 @@ thr_rss_listen_sock_create_ipv6(int rss_bucket, struct in6_addr lcl_addr,
 	int retval;
 
 	/* IPv6 */
-	fd = socket(PF_INET6, SOCK_STREAM, 0);
+	fd = socket(PF_INET6, SOCK_DGRAM, 0);
 	if (fd < 0) {
 		warn("%s: socket()", __func__);
 		goto error;
@@ -189,13 +189,6 @@ thr_rss_listen_sock_create_ipv6(int rss_bucket, struct in6_addr lcl_addr,
 	retval = bind(fd, (struct sockaddr *) &sa6, sizeof(sa6));
 	if (retval < 0) {
 		warn("%s: bind()", __func__);
-		goto error;
-	}
-
-	/* Listen */
-	retval = listen(fd, -1);
-	if (retval < 0) {
-		warn("%s: listen()", __func__);
 		goto error;
 	}
 
@@ -425,7 +418,7 @@ main(int argc, char *argv[])
 	int do_response;
 
 	if (argc < 3) {
-		printf("Usage: <1|0 - whether to respond or not to each UDP frame>  %s <local ipv4 port to bind to>\n",
+		printf("Usage: %s <1|0 - whether to respond or not to each UDP frame> <local ipv4 port to bind to>\n",
 		    argv[0]);
 		exit(1);
 	}
