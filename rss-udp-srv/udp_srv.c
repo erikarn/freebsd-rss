@@ -44,6 +44,38 @@ struct udp_srv_thread {
 };
 
 static int
+inet_aton6(const char *str, struct in6_addr *addr)
+{
+	struct addrinfo *res;
+	int error;
+	struct addrinfo hints;
+	struct sockaddr_in6 s;
+
+	memset(&hints, 0, sizeof(hints));
+
+	hints.ai_family = AF_INET6;
+	hints.ai_socktype = SOCK_DGRAM;
+	hints.ai_flags = AI_PASSIVE;
+	hints.ai_protocol = 0;
+	hints.ai_canonname = NULL;
+	hints.ai_addr = NULL;
+	hints.ai_next = NULL;
+
+	error = getaddrinfo(str, NULL, &hints, &res);
+	if (error != 0) {
+		warn("%s: getaddrinfo", __func__);
+		return (-1);
+	}
+
+	/* XXX ipv6 specific, tsk, use sockaddr_storage */
+	memcpy(&s, res->ai_addr, res->ai_addrlen);
+	*addr = s.sin6_addr;
+
+	freeaddrinfo(res);
+	return (0);
+}
+
+static int
 thr_sock_set_reuseaddr(int fd, int reuse_addr)
 {
 	int opt;
@@ -410,6 +442,8 @@ finish:
 	/* event_del? */
 	if (th->ev_read)
 		event_free(th->ev_read);
+	if (th->ev_read6)
+		event_free(th->ev_read6);
 	printf("%s [%d]: done\n", __func__, th->tid);
 	return (NULL);
 }
@@ -429,7 +463,7 @@ main(int argc, char *argv[])
 	int do_response;
 
 	if (argc < 3) {
-		printf("Usage: %s <response> <ipv4 lcl address>\n", argv[0]);
+		printf("Usage: %s <response> <ipv4 lcl address> <ipv6 lcl address>\n", argv[0]);
 		printf("    response: 1 if each RX packet generates a TX response, else 0\n");
 		printf("    ipv4 lcl address: IPv4 local address to bind to\n");
 		exit(1);
@@ -439,6 +473,7 @@ main(int argc, char *argv[])
 	lcl6_addr = in6addr_any;
 	do_response = atoi(argv[1]);
 	(void) inet_aton(argv[2], &lcl_addr);
+	(void) inet_aton6(argv[3], &lcl6_addr);
 
 	ncpu = rss_getsysctlint("net.inet.rss.ncpus");
 	if (ncpu < 0) {
