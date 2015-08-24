@@ -271,7 +271,7 @@ thr_udp_ev_read(int fd, short what, void *arg)
 	char buf[2048];
 	ssize_t ret;
 	int i = 0;
-	struct sockaddr_in sin;
+	struct sockaddr_storage sin;
 	socklen_t sin_len;
 
 #if 0
