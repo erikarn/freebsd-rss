@@ -418,8 +418,9 @@ main(int argc, char *argv[])
 	int do_response;
 
 	if (argc < 3) {
-		printf("Usage: %s <1|0 - whether to respond or not to each UDP frame> <local ipv4 port to bind to>\n",
-		    argv[0]);
+		printf("Usage: %s <response> <ipv4 lcl address>\n", argv[0]);
+		printf("    response: 1 if each RX packet generates a TX response, else 0\n");
+		printf("    ipv4 lcl address: IPv4 local address to bind to\n");
 		exit(1);
 	}
 
