@@ -155,7 +155,6 @@ error:
 	return (-1);
 }
 
-#if 0
 /*
  * IPv6 RSS listen socket creation.
  */
@@ -174,7 +173,7 @@ thr_rss_listen_sock_create_ipv6(int rss_bucket)
 		goto error;
 	}
 
-	if (thr_rss_listen_sock_setup(fd, AF_INET6, rss_bucket) < 0) {
+	if (thr_rss_udp_listen_sock_setup(fd, AF_INET6, rss_bucket) < 0) {
 		goto error;
 	}
 
@@ -210,7 +209,6 @@ error:
 	close(fd);
 	return (-1);
 }
-#endif
 
 static void
 thr_parse_msghdr(struct msghdr *m)
@@ -372,14 +370,11 @@ thr_udp_srv_init(void *arg)
 		fprintf(stderr, "%s: ipv4 listen socket creation failed!\n", __func__);
 	}
 
-#if 0
 	/* IPv6 socket */
 	th->s6 = thr_rss_listen_sock_create_ipv6(th->rss_bucket);
 	if (th->s6 < 0) {
 		fprintf(stderr, "%s: ipv6 listen socket creation failed!\n", __func__);
 	}
-#endif
-
 
 	th->ev_timer = evtimer_new(th->b, thr_ev_timer, th);
 	tv.tv_sec = 1;
