@@ -32,6 +32,8 @@ struct udp_srv_thread {
 	int s4, s6;
 	struct in_addr v4_listen_addr;
 	int v4_listen_port;
+	struct in6_addr v6_listen_addr;
+	int v6_listen_port;
 	int do_response;
 	uint64_t recv_pkts;
 	uint64_t sent_pkts;
@@ -159,7 +161,8 @@ error:
  * IPv6 RSS listen socket creation.
  */
 static int
-thr_rss_listen_sock_create_ipv6(int rss_bucket)
+thr_rss_listen_sock_create_ipv6(int rss_bucket, struct in6_addr lcl_addr,
+    int lcl_port)
 {
 	int fd;
 	struct sockaddr_in6 sa6;
@@ -180,8 +183,8 @@ thr_rss_listen_sock_create_ipv6(int rss_bucket)
 	/* Bind */
 	bzero(&sa6, sizeof(sa6));
 	sa6.sin6_family = AF_INET6;
-	sa6.sin6_port = htons(8080);
-	sa6.sin6_addr = in6addr_any;
+	sa6.sin6_port = htons(lcl_port);
+	sa6.sin6_addr = lcl_addr;
 
 	retval = bind(fd, (struct sockaddr *) &sa6, sizeof(sa6));
 	if (retval < 0) {
@@ -365,13 +368,15 @@ thr_udp_srv_init(void *arg)
 	th->s6 = -1;
 
 	/* IPv4 socket */
-	th->s4 = thr_rss_listen_udp_sock_create_ipv4(th->rss_bucket, th->v4_listen_addr, th->v4_listen_port);
+	th->s4 = thr_rss_listen_udp_sock_create_ipv4(th->rss_bucket,
+	    th->v4_listen_addr, th->v4_listen_port);
 	if (th->s4 < 0) {
 		fprintf(stderr, "%s: ipv4 listen socket creation failed!\n", __func__);
 	}
 
 	/* IPv6 socket */
-	th->s6 = thr_rss_listen_sock_create_ipv6(th->rss_bucket);
+	th->s6 = thr_rss_listen_sock_create_ipv6(th->rss_bucket,
+	    th->v6_listen_addr, th->v6_listen_port);
 	if (th->s6 < 0) {
 		fprintf(stderr, "%s: ipv6 listen socket creation failed!\n", __func__);
 	}
@@ -416,6 +421,7 @@ main(int argc, char *argv[])
 	int *bucket_map;
 	struct sigaction sa;
 	struct in_addr lcl_addr;
+	struct in6_addr lcl6_addr;
 	int do_response;
 
 	if (argc < 3) {
@@ -425,7 +431,7 @@ main(int argc, char *argv[])
 	}
 
 	lcl_addr.s_addr = INADDR_ANY;
-
+	lcl6_addr = in6addr_any;
 	do_response = atoi(argv[1]);
 	(void) inet_aton(argv[2], &lcl_addr);
 
@@ -483,6 +489,8 @@ main(int argc, char *argv[])
 		th[i].cpuid = bucket_map[i];
 		th[i].v4_listen_addr = lcl_addr;
 		th[i].v4_listen_port = 8080;
+		th[i].v6_listen_addr = lcl6_addr;
+		th[i].v6_listen_port = 8080;
 		th[i].do_response = do_response;
 		printf("starting: tid=%d, rss_bucket=%d, cpuid=%d\n",
 		    th[i].tid,
