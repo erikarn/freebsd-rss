@@ -40,6 +40,7 @@ struct udp_srv_thread {
 	struct event_base *b;
 	struct event *ev_timer;
 	struct event *ev_read, *ev_write;
+	struct event *ev_read6, *ev_write6;
 };
 
 static int
@@ -334,6 +335,12 @@ thr_udp_ev_read(int fd, short what, void *arg)
 #endif
 }
 
+static void
+thr_udp_ev_read6(int fd, short what, void *arg)
+{
+	thr_udp_ev_read(fd, what, arg);
+}
+
 static void *
 thr_udp_srv_init(void *arg)
 {
@@ -383,6 +390,10 @@ thr_udp_srv_init(void *arg)
 	th->ev_read = event_new(th->b, th->s4, EV_READ | EV_PERSIST,
 	    thr_udp_ev_read, th);
 	event_add(th->ev_read, NULL);
+
+	th->ev_read6 = event_new(th->b, th->s6, EV_READ | EV_PERSIST,
+	    thr_udp_ev_read6, th);
+	event_add(th->ev_read6, NULL);
 
 	/* Dispatch loop */
 	for (;;) {
