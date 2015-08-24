@@ -1,0 +1,235 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/errno.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+#include <event2/event.h>
+#include <event2/thread.h>
+#include <event2/util.h>
+
+#include <err.h>
+
+struct clt {
+	int fd;
+	struct {
+		char *buf;
+		int size;
+	} rb, wb;
+	const char *lcl_host;		/* local IP (string) */
+	const char *rem_host;		/* remote IP (string) */
+	struct sockaddr_in6 lcl_sin;	/* local socket */
+	struct in6_addr lcl_addr;	/* local IP */
+	struct sockaddr_in6 rem_sin;	/* remote socket */
+	struct in6_addr rem_addr;	/* remote IP */
+	int cnt;			/* total packets to be sent */
+	int cur_cnt;			/* total packets sent by now */
+	int port;			/* remote port to bind to */
+	int pkt_size;
+	struct event *ev_read, *ev_write;
+};
+
+static int
+inet_aton6(const char *str, struct in6_addr *addr)
+{
+	struct addrinfo *res;
+	int error;
+	struct addrinfo hints;
+	struct sockaddr_in6 s;
+
+	memset(&hints, 0, sizeof(hints));
+
+	hints.ai_family = AF_INET6;
+	hints.ai_socktype = SOCK_DGRAM;
+	hints.ai_flags = AI_PASSIVE;
+	hints.ai_protocol = 0;
+	hints.ai_canonname = NULL;
+	hints.ai_addr = NULL;
+	hints.ai_next = NULL;
+
+
+	error = getaddrinfo(str, NULL, &hints, &res);
+	if (error != 0) {
+		warn("%s: getaddrinfo", __func__);
+		return (-1);
+	}
+
+	/* XXX ipv6 specific, tsk, use sockaddr_storage */
+	memcpy(&s, res->ai_addr, res->ai_addrlen);
+	*addr = s.sin6_addr;
+
+	freeaddrinfo(res);
+	return (0);
+}
+
+void
+write_pkt(int fd, short what, void *arg)
+{
+	struct clt *c = arg;
+	int i;
+	int len;
+	int r;
+
+	for (i = 0; i < 128; i++) {
+		len = c->pkt_size;
+
+		r = sendto(c->fd, c->wb.buf, len, 0,
+		    (struct sockaddr *) &c->rem_sin, sizeof(c->rem_sin));
+		if (r < 0) {
+			if (errno == EWOULDBLOCK || errno == ENOBUFS) {
+				/* XXX should pause */
+				break;
+			}
+			warn("%s: sendto", __func__);
+		}
+		c->cur_cnt ++;
+		if (c->cnt != 0 && c->cur_cnt >= c->cnt)
+			exit(1);
+	}
+}
+
+void
+read_pkt(int fd, short what, void *arg)
+{
+	struct clt *c = arg;
+	int cnt;
+	int r;
+	int i;
+
+	for (i = 0; i < 128; i++) {
+		r = recv(c->fd, c->rb.buf, c->rb.size, MSG_DONTWAIT);
+		if (r <= 0)
+			break;
+	}
+}
+
+static void
+usage(void)
+{
+	fprintf(stderr,
+		"Usage: udp-ctl [-l local ip] [-r remote ip] [-p remote port] [-n numer of packets] [-s packet size]\n");
+	fprintf(stderr, "-n 0 == continuous send packets\n");
+	exit (1);
+}
+
+int
+main(int argc, char **argv)
+{
+	int r;
+	int i = 0;
+	struct clt *c;
+	struct event_base *b;
+	int opt, ch;
+
+	b = event_base_new();
+	if (b == NULL)
+		exit(128);
+
+	c = calloc(1, sizeof(*c));
+	if (c == NULL)
+		err(1, "calloc");
+	c->rb.buf = malloc(16384);
+	c->rb.size = 16384;
+	c->wb.buf = malloc(16384);
+	c->wb.size = 16384;
+
+	c->cnt = -1;
+
+	while ((ch = getopt(argc, argv, "l:r:p:n:s:")) != -1)
+		switch (ch) {
+		case 'l':
+			if (optarg)
+			    c->lcl_host = strdup(optarg);
+			break;
+		case 'r':
+			if (optarg)
+			    c->rem_host = strdup(optarg);
+			break;
+		case 'p':
+			if (optarg)
+			c->port = atoi(optarg);
+			break;
+		case 'n':
+			if (optarg)
+			    c->cnt = atoi(optarg);
+			else
+				usage();
+			break;
+		case 's':
+			if (optarg)
+				c->pkt_size = atoi(optarg);
+			break;
+		case '?':
+		default:
+			usage();
+		}
+	argc -= optind;
+	argv += optind;
+
+	if (c->lcl_host == NULL || c->rem_host == NULL ||
+	    c->port == 0 || c->cnt == -1 || c->pkt_size == 0)
+		usage();
+
+	printf("local ip: %s\n", c->lcl_host);
+	printf("remote ip: %s\n", c->rem_host);
+	printf("remote port: %d\n", c->port);
+	if (c->cnt == 0)
+		printf("total packets: continuous\n");
+	else
+		printf("total packets: %d\n", c->cnt);
+	printf("packet size: %d\n", c->pkt_size);
+
+	/* Socket setup */
+	c->fd = socket(PF_INET6, SOCK_DGRAM, 0);
+	if (c->fd < 0)
+		err(1, "socket");
+
+	/* Dont block */
+	if ((opt = fcntl(c->fd, F_GETFL, 0)) < 0
+	    || fcntl(c->fd, F_SETFL, opt | O_NONBLOCK) < 0) {
+		err(1, "fcntl");
+	}
+
+
+	r = inet_aton6(c->lcl_host, &c->lcl_addr);
+	if (r < 0)
+		err(1, "inet_aton");
+	r = inet_aton6(c->rem_host, &c->rem_addr);
+	if (r < 0)
+		err(1, "inet_aton");
+
+	/* Local bind */
+	bzero(&c->lcl_sin, sizeof(c->lcl_sin));
+	c->lcl_sin.sin6_family = AF_INET6;
+	c->lcl_sin.sin6_port = 0;
+	c->lcl_sin.sin6_addr = c->lcl_addr;
+
+	r = bind(c->fd, (struct sockaddr *) &c->lcl_sin, sizeof(c->lcl_sin));
+	if (r < 0)
+		err(1, "bind");
+
+	/* Remote bind */
+	bzero(&c->rem_sin, sizeof(c->rem_sin));
+	c->rem_sin.sin6_family = AF_INET6;
+	c->rem_sin.sin6_port = htons(c->port);
+	c->rem_sin.sin6_addr = c->rem_addr;
+
+	/* XXX randomize buf contents */
+	for (r = 0; r < c->wb.size; r++) {
+		c->wb.buf[r] = r;
+	}
+
+	c->ev_read = event_new(b, c->fd, EV_READ | EV_PERSIST, read_pkt, c);
+	c->ev_write = event_new(b, c->fd, EV_WRITE | EV_PERSIST, write_pkt, c);
+	event_add(c->ev_read, NULL);
+	event_add(c->ev_write, NULL);
+
+	(void) event_base_dispatch(b);
+
+	exit(0);
+}
