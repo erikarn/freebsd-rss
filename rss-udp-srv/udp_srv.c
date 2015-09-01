@@ -400,17 +400,21 @@ thr_udp_srv_init(void *arg)
 	th->s6 = -1;
 
 	/* IPv4 socket */
-	th->s4 = thr_rss_listen_udp_sock_create_ipv4(th->rss_bucket,
-	    th->v4_listen_addr, th->v4_listen_port);
-	if (th->s4 < 0) {
-		fprintf(stderr, "%s: ipv4 listen socket creation failed!\n", __func__);
+	if (th->v4_listen_port != -1) {
+		th->s4 = thr_rss_listen_udp_sock_create_ipv4(th->rss_bucket,
+		    th->v4_listen_addr, th->v4_listen_port);
+		if (th->s4 < 0) {
+			fprintf(stderr, "%s: ipv4 listen socket creation failed!\n", __func__);
+		}
 	}
 
 	/* IPv6 socket */
-	th->s6 = thr_rss_listen_sock_create_ipv6(th->rss_bucket,
-	    th->v6_listen_addr, th->v6_listen_port);
-	if (th->s6 < 0) {
-		fprintf(stderr, "%s: ipv6 listen socket creation failed!\n", __func__);
+	if (th->v6_listen_port != -1) {
+		th->s6 = thr_rss_listen_sock_create_ipv6(th->rss_bucket,
+		    th->v6_listen_addr, th->v6_listen_port);
+		if (th->s6 < 0) {
+			fprintf(stderr, "%s: ipv6 listen socket creation failed!\n", __func__);
+		}
 	}
 
 	th->ev_timer = evtimer_new(th->b, thr_ev_timer, th);
@@ -419,13 +423,17 @@ thr_udp_srv_init(void *arg)
 	evtimer_add(th->ev_timer, &tv);
 
 	/* Create read and write readiness events */
-	th->ev_read = event_new(th->b, th->s4, EV_READ | EV_PERSIST,
-	    thr_udp_ev_read, th);
-	event_add(th->ev_read, NULL);
+	if (th->v4_listen_port != -1) {
+		th->ev_read = event_new(th->b, th->s4, EV_READ | EV_PERSIST,
+		    thr_udp_ev_read, th);
+		event_add(th->ev_read, NULL);
+	}
 
-	th->ev_read6 = event_new(th->b, th->s6, EV_READ | EV_PERSIST,
-	    thr_udp_ev_read6, th);
-	event_add(th->ev_read6, NULL);
+	if (th->v6_listen_port != -1) {
+		th->ev_read6 = event_new(th->b, th->s6, EV_READ | EV_PERSIST,
+		    thr_udp_ev_read6, th);
+		event_add(th->ev_read6, NULL);
+	}
 
 	/* Dispatch loop */
 	for (;;) {
