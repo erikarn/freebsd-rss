@@ -456,6 +456,16 @@ finish:
 	return (NULL);
 }
 
+static void
+usage(const char *progname)
+{
+	fprintf(stderr,
+	    "    [-r <0|1>] [-s <v4 listen address] [-S <v6 listen address]\n");
+	fprintf(stderr,
+	    "    [-p <v4 listen port>] [-P [v6 listen port]\n");
+	exit(1);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -468,20 +478,43 @@ main(int argc, char *argv[])
 	struct sigaction sa;
 	struct in_addr lcl_addr;
 	struct in6_addr lcl6_addr;
+	int v4_port, v6_port;
 	int do_response;
-
-	if (argc < 3) {
-		printf("Usage: %s <response> <ipv4 lcl address> <ipv6 lcl address>\n", argv[0]);
-		printf("    response: 1 if each RX packet generates a TX response, else 0\n");
-		printf("    ipv4 lcl address: IPv4 local address to bind to\n");
-		exit(1);
-	}
+	int ch;
 
 	lcl_addr.s_addr = INADDR_ANY;
 	lcl6_addr = in6addr_any;
-	do_response = atoi(argv[1]);
-	(void) inet_aton(argv[2], &lcl_addr);
-	(void) inet_aton6(argv[3], &lcl6_addr);
+	v4_port = -1;
+	v6_port = -1;
+
+	while ((ch = getopt(argc, argv, "hr:s:S:p:P:")) != -1) {
+		switch (ch) {
+		case 'r':
+			do_response = atoi(optarg);
+			break;
+		case 's':
+			(void) inet_aton(optarg, &lcl_addr);
+			break;
+		case 'S':
+			(void) inet_aton6(optarg, &lcl6_addr);
+			break;
+		case 'p':
+			v4_port = atoi(optarg);
+			break;
+		case 'P':
+			v6_port = atoi(optarg);
+			break;
+		case 'h':
+		default:
+			usage(argv[0]);
+		}
+	}
+
+	if (v4_port == -1 && v6_port == -1) {
+		fprintf(stderr,
+		    "Error: at least one of v4,v6 port must be configured!\n");
+		usage(argv[0]);
+	}
 
 	ncpu = rss_getsysctlint("net.inet.rss.ncpus");
 	if (ncpu < 0) {
@@ -536,9 +569,9 @@ main(int argc, char *argv[])
 		th[i].rss_bucket = i;
 		th[i].cpuid = bucket_map[i];
 		th[i].v4_listen_addr = lcl_addr;
-		th[i].v4_listen_port = 8080;
+		th[i].v4_listen_port = v4_port;
 		th[i].v6_listen_addr = lcl6_addr;
-		th[i].v6_listen_port = 8080;
+		th[i].v6_listen_port = v6_port;
 		th[i].do_response = do_response;
 		printf("starting: tid=%d, rss_bucket=%d, cpuid=%d\n",
 		    th[i].tid,
