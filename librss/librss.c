@@ -70,8 +70,8 @@ rss_sock_set_recvrss(int fd, int af_family, int val)
 	opt = val;
 	optlen = sizeof(opt);
 	retval = setsockopt(fd,
-	    IPPROTO_IP,
-	    IP_RECVFLOWID,
+	    af_family == AF_INET ? IPPROTO_IP : IPPROTO_IPV6,
+	    af_family == AF_INET ? IP_RECVFLOWID : IPV6_RECVFLOWID,
 	    &opt,
 	    optlen);
 	if (retval < 0) {
@@ -83,8 +83,8 @@ rss_sock_set_recvrss(int fd, int af_family, int val)
 	opt = val;
 	optlen = sizeof(opt);
 	retval = setsockopt(fd,
-	    IPPROTO_IP,
-	    IP_RECVRSSBUCKETID,
+	    af_family == AF_INET ? IPPROTO_IP : IPPROTO_IPV6,
+	    af_family == AF_INET ? IP_RECVRSSBUCKETID: IPV6_RECVRSSBUCKETID,
 	    &opt,
 	    optlen);
 	if (retval < 0) {
