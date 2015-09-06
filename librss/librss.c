@@ -170,7 +170,7 @@ rss_config_get(void)
 		goto error;
 	}
 
-	rc->rss_nbuckets = rss_getsysctlint("net.inet.rss.nbuckets");
+	rc->rss_nbuckets = rss_getsysctlint("net.inet.rss.buckets");
 	if (rc->rss_nbuckets < 0) {
 		fprintf(stderr, "%s: couldn't fetch net.inet.rss.nbuckets\n", __func__);
 		goto error;

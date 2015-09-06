@@ -471,10 +471,7 @@ main(int argc, char *argv[])
 {
 	int i;
 	struct udp_srv_thread *th;
-	int ncpu;
-	int nbuckets;
-	int base_cpu;
-	int *bucket_map;
+	struct rss_config *rc;
 	struct sigaction sa;
 	struct in_addr lcl_addr;
 	struct in6_addr lcl6_addr;
@@ -516,41 +513,9 @@ main(int argc, char *argv[])
 		usage(argv[0]);
 	}
 
-	ncpu = rss_getsysctlint("net.inet.rss.ncpus");
-	if (ncpu < 0) {
-		fprintf(stderr, "Couldn't read net.inet.rss.ncpus\n");
-		exit(127);
-	}
-
-	nbuckets = rss_getsysctlint("net.inet.rss.buckets");
-	if (nbuckets < 0) {
-		fprintf(stderr, "Couldn't read net.inet.rss.buckets\n");
-		exit(127);
-	}
-
-	base_cpu = rss_getsysctlint("net.inet.rss.basecpu");
-	if (base_cpu < 0) {
-		fprintf(stderr, "Couldn't read net.inet.rss.basecpu\n");
-		exit(127);
-	}
-
-	/*
-	 * XXX for now this isn't needed - the bucket mapping will
-	 * give us the explicit cpuid to use.
-	 */
-
-	/* Allocate enough threads - one per bucket */
-	th = calloc(nbuckets, sizeof(*th));
-	if (th == NULL)
-		err(127, "calloc");
-
-	/* And the bucket map */
-	bucket_map = calloc(nbuckets, sizeof(int));
-	if (bucket_map == NULL)
-		err(127, "calloc");
-
-	if (rss_getbucketmap(bucket_map, nbuckets) < 0) {
-		fprintf(stderr, "Couldn't read net.inet.rss.bucket_mapping");
+	rc = rss_config_get();
+	if (rc == NULL) {
+		fprintf(stderr, "Couldn't fetch rss configuration\n");
 		exit(127);
 	}
 
@@ -564,10 +529,15 @@ main(int argc, char *argv[])
 	if (sigemptyset(&sa.sa_mask) == -1 || sigaction(SIGPIPE, &sa, 0) == -1)
 		perror("failed to ignore SIGPIPE; sigaction");
 
-	for (i = 0; i < nbuckets; i++) {
+	/* Allocate enough threads - one per bucket */
+	th = calloc(rc->rss_nbuckets, sizeof(*th));
+	if (th == NULL)
+		err(127, "calloc");
+
+	for (i = 0; i < rc->rss_nbuckets; i++) {
 		th[i].tid = i;
 		th[i].rss_bucket = i;
-		th[i].cpuid = bucket_map[i];
+		th[i].cpuid = rc->rss_bucket_map[i];
 		th[i].v4_listen_addr = lcl_addr;
 		th[i].v4_listen_port = v4_port;
 		th[i].v6_listen_addr = lcl6_addr;
@@ -581,7 +551,7 @@ main(int argc, char *argv[])
 	}
 
 	/* Wait */
-	for (i = 0; i < nbuckets; i++) {
+	for (i = 0; i < rc->rss_nbuckets; i++) {
 		(void) pthread_join(th[i].thr, NULL);
 	}
 

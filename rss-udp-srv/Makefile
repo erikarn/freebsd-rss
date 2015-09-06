@@ -4,7 +4,7 @@ SRCS=udp_srv.c
 LDADD=-lpthread
 
 # libevent
-CFLAGS+=-I/usr/local/include
+CFLAGS+=-I/usr/local/include -g -O0
 LDFLAGS+=-L/usr/local/lib/
 LDADD+= -levent -levent_pthreads
 
