@@ -8,6 +8,15 @@ struct rss_config {
 	int *rss_bucket_map;
 };
 
+typedef enum {
+	RSS_BUCKET_TYPE_NONE = 0,
+	RSS_BUCKET_TYPE_KERNEL_TX = 1,
+	RSS_BUCKET_TYPE_KERNEL_RX = 2,
+	RSS_BUCKET_TYPE_USER_TX = 3,
+	RSS_BUCKET_TYPE_USER_RX = 4,
+	RSS_BUCKET_TYPE_MAX = 4,
+} rss_bucket_type_t;
+
 /*
  * Enable/disable whether to allow for multiple bind()s to the
  * given PCB entry.
@@ -29,20 +38,6 @@ extern	int rss_sock_set_rss_bucket(int fd, int af_family, int rss_bucket);
  */
 extern	int rss_sock_set_recvrss(int fd, int af_family, int val);
 
-#if 0
-/*
- * Generic "retrive the int value for the given sysctl"
- * worker function.
- */
-extern	int rss_getsysctlint(const char *s);
-
-/*
- * Retrieve the mapping between RSS bucket and
- * CPU ID.
- */
-extern	int rss_getbucketmap(int *bucket_map, int nbuckets);
-#endif
-
 /*
  * Fetch RSS configuration information.
  */
@@ -52,5 +47,12 @@ extern	struct rss_config * rss_config_get(void);
  * Free an RSS configuration structure.
  */
 extern	void rss_config_free(struct rss_config *rc);
+
+/*
+ * Fetch the cpuset configuration for the given RSS bucket and
+ * type.
+ */
+extern	int rss_get_bucket_cpuset(struct rss_config *rc,
+    rss_bucket_type_t btype, int bucket, cpuset_t *cs);
 
 #endif /* __LIBRSS_H__ */

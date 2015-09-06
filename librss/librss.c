@@ -5,6 +5,7 @@
 #include <err.h>
 #include <fcntl.h>
 #include <string.h>
+#include <errno.h>
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -95,7 +96,7 @@ rss_sock_set_recvrss(int fd, int af_family, int val)
 	return (0);
 }
 
-int
+static int
 rss_getsysctlint(const char *s)
 {
 	int val, retval;
@@ -111,7 +112,7 @@ rss_getsysctlint(const char *s)
 	return (val);
 }
 
-int
+static int
 rss_getbucketmap(int *bucket_map, int nbuckets)
 {
 	/* XXX I'm lazy; so static string it is */
@@ -211,4 +212,30 @@ rss_config_free(struct rss_config *rc)
 		free(rc->rss_bucket_map);
 	if (rc)
 		free(rc);
+}
+
+int
+rss_get_bucket_cpuset(struct rss_config *rc, rss_bucket_type_t btype,
+    int bucket, cpuset_t *cs)
+{
+
+	if (bucket < 0 || bucket >= rc->rss_nbuckets) {
+		errno = EINVAL;
+		return (-1);
+	}
+
+	/*
+	 * For now all buckets are the same, but eventually we'll want
+	 * to allow administrators to set separate RSS cpusets for
+	 * {kernel,user} {tx, rx} combinations.
+	 */
+	if (btype <= RSS_BUCKET_TYPE_NONE || btype > RSS_BUCKET_TYPE_MAX) {
+		errno = ENOTSUP;
+		return (-1);
+	}
+
+	CPU_ZERO(cs);
+	CPU_SET(rc->rss_bucket_map[bucket], cs);
+
+	return (0);
 }
