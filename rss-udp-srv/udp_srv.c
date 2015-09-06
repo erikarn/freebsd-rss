@@ -555,5 +555,8 @@ main(int argc, char *argv[])
 		(void) pthread_join(th[i].thr, NULL);
 	}
 
+	/* Finished! */
+	rss_config_free(rc);
+
 	exit(0);
 }
