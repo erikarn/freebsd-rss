@@ -29,6 +29,7 @@ extern	int rss_sock_set_rss_bucket(int fd, int af_family, int rss_bucket);
  */
 extern	int rss_sock_set_recvrss(int fd, int af_family, int val);
 
+#if 0
 /*
  * Generic "retrive the int value for the given sysctl"
  * worker function.
@@ -40,6 +41,7 @@ extern	int rss_getsysctlint(const char *s);
  * CPU ID.
  */
 extern	int rss_getbucketmap(int *bucket_map, int nbuckets);
+#endif
 
 /*
  * Fetch RSS configuration information.

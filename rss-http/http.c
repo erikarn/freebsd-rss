@@ -302,27 +302,12 @@ main(int argc, char *argv[])
 {
 	int i;
 	struct http_srv_thread *th;
-	int ncpu;
-	int nbuckets;
-	int base_cpu;
-	int *bucket_map;
 	struct sigaction sa;
+	struct rss_config *rc;
 
-	ncpu = rss_getsysctlint("net.inet.rss.ncpus");
-	if (ncpu < 0) {
-		fprintf(stderr, "Couldn't read net.inet.rss.ncpus\n");
-		exit(127);
-	}
-
-	nbuckets = rss_getsysctlint("net.inet.rss.buckets");
-	if (nbuckets < 0) {
-		fprintf(stderr, "Couldn't read net.inet.rss.buckets\n");
-		exit(127);
-	}
-
-	base_cpu = rss_getsysctlint("net.inet.rss.basecpu");
-	if (base_cpu < 0) {
-		fprintf(stderr, "Couldn't read net.inet.rss.basecpu\n");
+	rc = rss_config_get();
+	if (rc == NULL) {
+		fprintf(stderr, "can't fetch rss config!\n");
 		exit(127);
 	}
 
@@ -332,19 +317,9 @@ main(int argc, char *argv[])
 	 */
 
 	/* Allocate enough threads - one per bucket */
-	th = calloc(nbuckets, sizeof(*th));
+	th = calloc(rc->rss_nbuckets, sizeof(*th));
 	if (th == NULL)
 		err(127, "calloc");
-
-	/* And the bucket map */
-	bucket_map = calloc(nbuckets, sizeof(int));
-	if (bucket_map == NULL)
-		err(127, "calloc");
-
-	if (rss_getbucketmap(bucket_map, nbuckets) < 0) {
-		fprintf(stderr, "Couldn't read net.inet.rss.bucket_mapping");
-		exit(127);
-	}
 
 //	event_enable_debug_mode();
 	evthread_use_pthreads();
@@ -356,10 +331,10 @@ main(int argc, char *argv[])
 	if (sigemptyset(&sa.sa_mask) == -1 || sigaction(SIGPIPE, &sa, 0) == -1)
 		perror("failed to ignore SIGPIPE; sigaction");
 
-	for (i = 0; i < nbuckets; i++) {
+	for (i = 0; i < rc->rss_nbuckets; i++) {
 		th[i].tid = i;
 		th[i].rss_bucket = i;
-		th[i].cpuid = bucket_map[i];
+		th[i].cpuid = rc->rss_bucket_map[i];
 		printf("starting: tid=%d, rss_bucket=%d, cpuid=%d\n",
 		    th[i].tid,
 		    th[i].rss_bucket,
@@ -368,9 +343,11 @@ main(int argc, char *argv[])
 	}
 
 	/* Wait */
-	for (i = 0; i < nbuckets; i++) {
+	for (i = 0; i < rc->rss_nbuckets; i++) {
 		(void) pthread_join(th[i].thr, NULL);
 	}
+
+	rss_config_free(rc);
 
 	exit(0);
 }
