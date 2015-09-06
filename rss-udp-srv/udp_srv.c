@@ -28,7 +28,7 @@ struct udp_srv_thread {
 	pthread_t thr;
 	int tid;
 	int rss_bucket;
-	int cpuid;
+	cpuset_t cs;
 	int s4, s6;
 	struct in_addr v4_listen_addr;
 	int v4_listen_port;
@@ -97,19 +97,37 @@ thr_sock_set_reuseaddr(int fd, int reuse_addr)
 }
 
 #if 0
-        /* reuseaddr/reuseport */
-        opt = 1;
-        optlen = sizeof(opt);
-        retval = setsockopt(th->s, SOL_SOCKET,
-            SO_REUSEADDR,
-            &opt,
-            optlen);
-        if (retval < 0) {
-                warn("%s: setsockopt(SO_REUSEPORT)", __func__);
-                close(th->s);
-                return (NULL);
-        }
+	/* reuseaddr/reuseport */
+	opt = 1;
+	optlen = sizeof(opt);
+	retval = setsockopt(th->s, SOL_SOCKET,
+	    SO_REUSEADDR,
+	    &opt,
+	    optlen);
+	if (retval < 0) {
+		warn("%s: setsockopt(SO_REUSEPORT)", __func__);
+		close(th->s);
+		return (NULL);
+	}
 #endif
+
+static void
+printset(cpuset_t *mask)
+{
+	int once;
+	int cpu;
+
+	for (once = 0, cpu = 0; cpu < CPU_SETSIZE; cpu++) {
+		if (CPU_ISSET(cpu, mask)) {
+			if (once == 0) {
+				printf("%d", cpu);
+				once = 1;
+			} else
+				printf(", %d", cpu);
+		}
+	}
+	printf("\n");
+}
 
 /*
  * Setup the RSS state for a listen socket.
@@ -379,16 +397,12 @@ thr_udp_srv_init(void *arg)
 	struct udp_srv_thread *th = arg;
 	int opt;
 	socklen_t optlen;
-	cpuset_t cp;
 	int retval;
 	char buf[128];
 	struct timeval tv;
 
 	/* thread pin for RSS */
-	CPU_ZERO(&cp);
-	CPU_SET(th->cpuid, &cp);
-
-	if (pthread_setaffinity_np(th->thr, sizeof(cpuset_t), &cp) != 0)
+	if (pthread_setaffinity_np(th->thr, sizeof(cpuset_t), &th->cs) != 0)
 		warn("pthread_setaffinity_np (id %d)", th->tid);
 
 	printf("[%d] th=%p\n", th->tid, th);
@@ -537,16 +551,19 @@ main(int argc, char *argv[])
 	for (i = 0; i < rc->rss_nbuckets; i++) {
 		th[i].tid = i;
 		th[i].rss_bucket = i;
-		th[i].cpuid = rc->rss_bucket_map[i];
+		(void) rss_get_bucket_cpuset(rc,
+		    RSS_BUCKET_TYPE_KERNEL_ALL,
+		    i,
+		    &th[i].cs);
 		th[i].v4_listen_addr = lcl_addr;
 		th[i].v4_listen_port = v4_port;
 		th[i].v6_listen_addr = lcl6_addr;
 		th[i].v6_listen_port = v6_port;
 		th[i].do_response = do_response;
-		printf("starting: tid=%d, rss_bucket=%d, cpuid=%d\n",
+		printf("starting: tid=%d, rss_bucket=%d, cpuset=",
 		    th[i].tid,
-		    th[i].rss_bucket,
-		    th[i].cpuid);
+		    th[i].rss_bucket);
+		printset(&th[i].cs);
 		(void) pthread_create(&th[i].thr, NULL, thr_udp_srv_init, &th[i]);
 	}
 
