@@ -239,3 +239,14 @@ rss_get_bucket_cpuset(struct rss_config *rc, rss_bucket_type_t btype,
 
 	return (0);
 }
+
+int
+rss_set_bucket_rebalance_cb(rss_bucket_rebalance_cb_t *cb, void *cbdata)
+{
+
+	/*
+	 * For now there's no rebalance callback, so
+	 * just return 0 and ignore it.
+	 */
+	return (0);
+}

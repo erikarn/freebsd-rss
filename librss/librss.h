@@ -16,6 +16,8 @@ typedef enum {
 	RSS_BUCKET_TYPE_MAX = 3,
 } rss_bucket_type_t;
 
+typedef void rss_bucket_rebalance_cb_t(void *arg);
+
 /*
  * Enable/disable whether to allow for multiple bind()s to the
  * given PCB entry.
@@ -53,5 +55,14 @@ extern	void rss_config_free(struct rss_config *rc);
  */
 extern	int rss_get_bucket_cpuset(struct rss_config *rc,
     rss_bucket_type_t btype, int bucket, cpuset_t *cs);
+
+/*
+ * Set a callback for bucket rebalancing.
+ *
+ * This will occur in a separate thread context rather than
+ * a signal handler.
+ */
+extern	int rss_set_bucket_rebalance_cb(rss_bucket_rebalance_cb_t *cb,
+	    void *cbdata);
 
 #endif /* __LIBRSS_H__ */
