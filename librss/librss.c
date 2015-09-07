@@ -152,3 +152,63 @@ rss_getbucketmap(int *bucket_map, int nbuckets)
 	}
 	return (0);
 }
+
+struct rss_config *
+rss_config_get(void)
+{
+	struct rss_config *rc = NULL;
+
+	rc = calloc(1, sizeof(*rc));
+	if (rc == NULL) {
+		warn("%s: calloc", __func__);
+		goto error;
+	}
+
+	rc->rss_ncpus = rss_getsysctlint("net.inet.rss.ncpus");
+	if (rc->rss_ncpus < 0) {
+		fprintf(stderr, "%s: couldn't fetch net.inet.rss.ncpus\n", __func__);
+		goto error;
+	}
+
+	rc->rss_nbuckets = rss_getsysctlint("net.inet.rss.nbuckets");
+	if (rc->rss_nbuckets < 0) {
+		fprintf(stderr, "%s: couldn't fetch net.inet.rss.nbuckets\n", __func__);
+		goto error;
+	}
+
+	rc->rss_basecpu = rss_getsysctlint("net.inet.rss.basecpu");
+	if (rc->rss_basecpu< 0) {
+		fprintf(stderr, "%s: couldn't fetch net.inet.rss.basecpu\n", __func__);
+		goto error;
+	}
+
+	rc->rss_bucket_map = calloc(rc->rss_nbuckets, sizeof(int));
+	if (rc->rss_bucket_map == NULL) {
+		warn("%s: calloc (rss buckets; %d entries)", __func__, rc->rss_nbuckets);
+		goto error;
+	}
+
+	if (rss_getbucketmap(rc->rss_bucket_map, rc->rss_nbuckets) != 0) {
+		fprintf(stderr, "%s: rss_getbucketmap failed\n", __func__);
+		goto error;
+	}
+
+	return (rc);
+
+error:
+	if (rc && rc->rss_bucket_map)
+		free(rc->rss_bucket_map);
+	if (rc)
+		free(rc);
+	return (NULL);
+}
+
+void
+rss_config_free(struct rss_config *rc)
+{
+
+	if (rc && rc->rss_bucket_map)
+		free(rc->rss_bucket_map);
+	if (rc)
+		free(rc);
+}

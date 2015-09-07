@@ -1,6 +1,13 @@
 #ifndef	__LIBRSS_H__
 #define	__LIBRSS_H__
 
+struct rss_config {
+	int rss_ncpus;
+	int rss_nbuckets;
+	int rss_basecpu;
+	int *rss_bucket_map;
+};
+
 /*
  * Enable/disable whether to allow for multiple bind()s to the
  * given PCB entry.
@@ -33,5 +40,15 @@ extern	int rss_getsysctlint(const char *s);
  * CPU ID.
  */
 extern	int rss_getbucketmap(int *bucket_map, int nbuckets);
+
+/*
+ * Fetch RSS configuration information.
+ */
+extern	struct rss_config * rss_config_get(void);
+
+/*
+ * Free an RSS configuration structure.
+ */
+extern	void rss_config_free(struct rss_config *rc);
 
 #endif /* __LIBRSS_H__ */
