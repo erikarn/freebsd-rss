@@ -258,7 +258,7 @@ error:
 }
 
 static void
-thr_parse_msghdr(struct msghdr *m)
+thr_parse_msghdr(struct msghdr *m, int af_family)
 {
 	const struct cmsghdr *c;
 	uint32_t flowid;
@@ -271,18 +271,37 @@ thr_parse_msghdr(struct msghdr *m)
 		printf("  msghdr type: %d\n", c->cmsg_type);
 		printf("  msghdr len: %d\n", c->cmsg_len);
 #endif
-		if (c->cmsg_level != IPPROTO_IP)
-			continue;
-		switch (c->cmsg_type) {
-			case IP_FLOWID:
-				flowid = *(uint32_t *) CMSG_DATA(c);
-				break;
-			case IP_FLOWTYPE:
-				flowtype = *(uint32_t *) CMSG_DATA(c);
-				break;
-			case IP_RSSBUCKETID:
-				flow_rssbucket = *(uint32_t *) CMSG_DATA(c);
-				break;
+		switch (af_family) {
+		case AF_INET:
+			if (c->cmsg_level != IPPROTO_IP)
+				continue;
+			switch (c->cmsg_type) {
+				case IP_FLOWID:
+					flowid = *(uint32_t *) CMSG_DATA(c);
+					break;
+				case IP_FLOWTYPE:
+					flowtype = *(uint32_t *) CMSG_DATA(c);
+					break;
+				case IP_RSSBUCKETID:
+					flow_rssbucket = *(uint32_t *) CMSG_DATA(c);
+					break;
+			}
+			break;
+		case AF_INET6:
+			if (c->cmsg_level != IPPROTO_IPV6)
+				continue;
+			switch (c->cmsg_type) {
+				case IPV6_FLOWID:
+					flowid = *(uint32_t *) CMSG_DATA(c);
+					break;
+				case IPV6_FLOWTYPE:
+					flowtype = *(uint32_t *) CMSG_DATA(c);
+					break;
+				case IPV6_RSSBUCKETID:
+					flow_rssbucket = *(uint32_t *) CMSG_DATA(c);
+					break;
+			}
+			break;
 		}
 	}
 #if 0
@@ -314,7 +333,7 @@ thr_ev_timer(int fd, short what, void *arg)
 
 
 static void
-thr_udp_ev_read(int fd, short what, void *arg)
+thr_udp_ev_read(int fd, short what, void *arg, int af_family)
 {
 	struct udp_srv_thread *th = arg;
 	/* XXX should be thread-local, and a larger buffer, and likely a queue .. */
@@ -364,7 +383,7 @@ thr_udp_ev_read(int fd, short what, void *arg)
 		printf("  recv: len=%d, controllen=%d\n",
 		    (int) ret,
 		    (int) m.msg_controllen);
-		thr_parse_msghdr(&m);
+		thr_parse_msghdr(&m, af_family);
 #endif
 		i++;
 		th->recv_pkts++;
@@ -386,9 +405,15 @@ thr_udp_ev_read(int fd, short what, void *arg)
 }
 
 static void
+thr_udp_ev_read4(int fd, short what, void *arg)
+{
+	thr_udp_ev_read(fd, what, arg, AF_INET);
+}
+
+static void
 thr_udp_ev_read6(int fd, short what, void *arg)
 {
-	thr_udp_ev_read(fd, what, arg);
+	thr_udp_ev_read(fd, what, arg, AF_INET6);
 }
 
 static void *
@@ -439,7 +464,7 @@ thr_udp_srv_init(void *arg)
 	/* Create read and write readiness events */
 	if (th->v4_listen_port != -1) {
 		th->ev_read = event_new(th->b, th->s4, EV_READ | EV_PERSIST,
-		    thr_udp_ev_read, th);
+		    thr_udp_ev_read4, th);
 		event_add(th->ev_read, NULL);
 	}
 
