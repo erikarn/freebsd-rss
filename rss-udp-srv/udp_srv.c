@@ -24,6 +24,8 @@
 
 #include "librss.h"
 
+static int debug = 0;
+
 struct udp_srv_thread {
 	pthread_t thr;
 	int tid;
@@ -146,11 +148,9 @@ thr_rss_udp_listen_sock_setup(int fd, int af_family, int rss_bucket)
 		return (-1);
 	}
 
-#if 0
-	if (rss_sock_set_recvrss(fd, af_family, rss_bucket) < 0) {
+	if (debug && rss_sock_set_recvrss(fd, af_family, 1) < 0) {
 		return (-1);
 	}
-#endif
 
 	if (thr_sock_set_reuseaddr(fd, 1) < 0) {
 		return (-1);
@@ -258,6 +258,30 @@ error:
 }
 
 static void
+thr_parse_sockaddr(const struct sockaddr *addr)
+{
+	const struct sockaddr_in *sa4;
+	const struct sockaddr_in6 *sa6;
+	char ipstr[INET6_ADDRSTRLEN];
+	int port;
+
+	switch (addr->sa_family) {
+	case AF_INET:
+		sa4 = (const struct sockaddr_in *) addr;
+		inet_ntop(AF_INET, &sa4->sin_addr, ipstr, sizeof(ipstr));
+		port = ntohs(sa4->sin_port);
+		break;
+	case AF_INET6:
+		sa6 = (const struct sockaddr_in6 *) addr;
+		inet_ntop(AF_INET6, &sa6->sin6_addr, ipstr, sizeof(ipstr));
+		port = ntohs(sa6->sin6_port);
+		break;
+	}
+
+	printf("  from: %s %d\n", ipstr, port);
+}
+
+static void
 thr_parse_msghdr(struct msghdr *m, int af_family)
 {
 	const struct cmsghdr *c;
@@ -304,9 +328,8 @@ thr_parse_msghdr(struct msghdr *m, int af_family)
 			break;
 		}
 	}
-#if 0
+
 	printf("  flowid=0x%08x; flowtype=%d; bucket=%d\n", flowid, flowtype, flow_rssbucket);
-#endif
 }
 
 static void
@@ -343,48 +366,47 @@ thr_udp_ev_read(int fd, short what, void *arg, int af_family)
 	struct sockaddr_storage sin;
 	socklen_t sin_len;
 
-#if 0
 	/* for the msghdr contents */
 	struct msghdr m;
 	char msgbuf[2048];
-	int msglen;
 
 	struct iovec iov[1];
-#endif
 
 	/* Loop read UDP frames until EWOULDBLOCK or 1024 frames */
 	while (i < 10240) {
 
-#if 0
 		iov[0].iov_base = buf;
-		iov[0].iov_len = 2048;
+		iov[0].iov_len = sizeof(buf);
 
-		m.msg_name = NULL;
-		m.msg_namelen = 0;
+		m.msg_name = &sin;
+		m.msg_namelen = sizeof(sin);
 		m.msg_iov = iov;
 		m.msg_iovlen = 1;
-		m.msg_control = &msgbuf;
-		m.msg_controllen = 2048;
 		m.msg_flags = 0;
+		if (debug) {
+			m.msg_control = &msgbuf;
+			m.msg_controllen = sizeof(msgbuf);
+		} else {
+			m.msg_control = NULL;
+			m.msg_controllen = 0;
+		}
 
-		ret = recvmsg(fd, &m, 0);
-#endif
-		sin_len = sizeof(sin);
-		ret = recvfrom(fd, buf, 2048, MSG_DONTWAIT,
-		    (struct sockaddr *) &sin,
-		    &sin_len);
-
+		ret = recvmsg(fd, &m, MSG_DONTWAIT);
 		if (ret <= 0) {
 			if (errno != EWOULDBLOCK)
 				warn("%s: recv", __func__);
 			break;
 		}
-#if 0
-		printf("  recv: len=%d, controllen=%d\n",
-		    (int) ret,
-		    (int) m.msg_controllen);
-		thr_parse_msghdr(&m, af_family);
-#endif
+
+		sin_len = m.msg_namelen;
+
+		if (debug) {
+			printf("  recv: len=%d, controllen=%d\n",
+			    (int) ret,
+			    (int) m.msg_controllen);
+			thr_parse_sockaddr((struct sockaddr *) &sin);
+			thr_parse_msghdr(&m, af_family);
+		}
 		i++;
 		th->recv_pkts++;
 
@@ -501,7 +523,7 @@ usage(const char *progname)
 	fprintf(stderr,
 	    "    [-r <0|1>] [-s <v4 listen address] [-S <v6 listen address]\n");
 	fprintf(stderr,
-	    "    [-p <v4 listen port>] [-P [v6 listen port]\n");
+	    "    [-p <v4 listen port>] [-P [v6 listen port] [-d]\n");
 	exit(1);
 }
 
@@ -523,8 +545,11 @@ main(int argc, char *argv[])
 	v4_port = -1;
 	v6_port = -1;
 
-	while ((ch = getopt(argc, argv, "hr:s:S:p:P:")) != -1) {
+	while ((ch = getopt(argc, argv, "dhr:s:S:p:P:")) != -1) {
 		switch (ch) {
+		case 'd':
+			debug = 1;
+			break;
 		case 'r':
 			do_response = atoi(optarg);
 			break;
