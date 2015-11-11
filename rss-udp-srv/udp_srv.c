@@ -27,6 +27,20 @@
 
 static int debug = 0;
 
+struct flow {
+	RB_ENTRY(flow) link;
+	uint32_t flowid;
+	uint32_t flowtype;
+	uint32_t flow_rssbucket;
+	uint64_t count;
+};
+
+static int flow_cmp(struct flow *a, struct flow *b);
+
+RB_HEAD(flow_tree, flow);
+RB_PROTOTYPE_STATIC(flow_tree, flow, link, flow_cmp);
+RB_GENERATE_STATIC(flow_tree, flow, link, flow_cmp);
+
 struct udp_srv_thread {
 	pthread_t thr;
 	int tid;
@@ -44,23 +58,12 @@ struct udp_srv_thread {
 	struct event *ev_timer;
 	struct event *ev_read, *ev_write;
 	struct event *ev_read6, *ev_write6;
+	struct flow_tree flow_root;
+	pthread_mutex_t flow_lock;
 };
 
-struct flow {
-	RB_ENTRY(flow) link;
-	uint32_t flowid;
-	uint32_t flowtype;
-	uint32_t flow_rssbucket;
-	uint64_t count;
-};
-
-static pthread_mutex_t flow_lock;
-
-static int flow_cmp(struct flow *a, struct flow *b);
-
-RB_HEAD(flow_tree, flow) flow_root;
-RB_PROTOTYPE_STATIC(flow_tree, flow, link, flow_cmp);
-RB_GENERATE_STATIC(flow_tree, flow, link, flow_cmp);
+static struct udp_srv_thread *threads;
+static struct flow_tree flow_root;
 
 static int
 flow_cmp(struct flow *a, struct flow *b)
@@ -77,19 +80,45 @@ flow_cmp(struct flow *a, struct flow *b)
 static void
 flow_dump(int signo)
 {
-	struct flow *fp;
+	struct udp_srv_thread *th = threads;
+	struct rss_config *rc;
+	struct flow *fp, *nfp;
+	int i;
+
+	rc = rss_config_get();
+
+	for (i = 0; i < rc->rss_nbuckets; i++) {
+		pthread_mutex_lock(&th[i].flow_lock);
+		RB_FOREACH(fp, flow_tree, &th[i].flow_root) {
+			nfp = RB_FIND(flow_tree, &flow_root, fp);
+			if (nfp == NULL) {
+				nfp = malloc(sizeof(*nfp));
+				if (nfp == NULL) {
+					warn("%s: malloc", __func__);
+					continue;
+				}
+
+				bcopy(fp, nfp, sizeof(*nfp));
+				RB_INSERT(flow_tree, &flow_root, nfp);
+			} else {
+				nfp->count += fp->count;
+			}
+			fp->count = 0;
+		}
+		pthread_mutex_unlock(&th[i].flow_lock);
+	}
 
 	if (RB_EMPTY(&flow_root)) {
 		printf("flow tree is empty.\n");
 		return;
 	}
 
-	pthread_mutex_lock(&flow_lock);
 	RB_FOREACH(fp, flow_tree, &flow_root) {
 		printf("count(flowid=0x%08x,flowtype=%u,flow_rssbucket=%u) = %lu\n",
 		    fp->flowid, fp->flowtype, fp->flow_rssbucket, fp->count);
 	}
-	pthread_mutex_unlock(&flow_lock);
+
+	rss_config_free(rc);
 }
 
 static int
@@ -329,8 +358,9 @@ thr_parse_sockaddr(const struct sockaddr *addr)
 }
 
 static void
-thr_parse_msghdr(struct msghdr *m, int af_family)
+thr_parse_msghdr(struct msghdr *m, int af_family, void *arg)
 {
+	struct udp_srv_thread *th = arg;
 	const struct cmsghdr *c;
 	uint32_t flowid;
 	uint32_t flowtype;
@@ -389,16 +419,16 @@ thr_parse_msghdr(struct msghdr *m, int af_family)
 		nfp->flowtype = flowtype;
 		nfp->flow_rssbucket = flow_rssbucket;
 
-		pthread_mutex_lock(&flow_lock);
-		fp = RB_FIND(flow_tree, &flow_root, nfp);
+		pthread_mutex_lock(&th->flow_lock);
+		fp = RB_FIND(flow_tree, &th->flow_root, nfp);
 		if (fp == NULL) {
 			nfp->count = 1;
-			RB_INSERT(flow_tree, &flow_root, nfp);
+			RB_INSERT(flow_tree, &th->flow_root, nfp);
 		} else {
 			fp->count++;
 			free(nfp);
 		}
-		pthread_mutex_unlock(&flow_lock);
+		pthread_mutex_unlock(&th->flow_lock);
 		return;
 	}
 
@@ -479,7 +509,7 @@ thr_udp_ev_read(int fd, short what, void *arg, int af_family)
 				    (int) m.msg_controllen);
 				thr_parse_sockaddr((struct sockaddr *) &sin);
 			}
-			thr_parse_msghdr(&m, af_family);
+			thr_parse_msghdr(&m, af_family, arg);
 		}
 		i++;
 		th->recv_pkts++;
@@ -667,16 +697,12 @@ main(int argc, char *argv[])
 	if (sigemptyset(&sa.sa_mask) == -1 || sigaction(SIGPIPE, &sa, 0) == -1)
 		perror("failed to ignore SIGPIPE; sigaction");
 
-	if (debug >= 2) {
-		pthread_mutex_init(&flow_lock, NULL);
-		RB_INIT(&flow_root);
-		signal(SIGINFO, flow_dump);
-	}
-
 	/* Allocate enough threads - one per bucket */
 	th = calloc(rc->rss_nbuckets, sizeof(*th));
 	if (th == NULL)
 		err(127, "calloc");
+
+	threads = th;
 
 	for (i = 0; i < rc->rss_nbuckets; i++) {
 		th[i].tid = i;
@@ -690,11 +716,18 @@ main(int argc, char *argv[])
 		th[i].v6_listen_addr = lcl6_addr;
 		th[i].v6_listen_port = v6_port;
 		th[i].do_response = do_response;
+		pthread_mutex_init(&th[i].flow_lock, NULL);
+		RB_INIT(&th[i].flow_root);
 		printf("starting: tid=%d, rss_bucket=%d, cpuset=",
 		    th[i].tid,
 		    th[i].rss_bucket);
 		printset(&th[i].cs);
 		(void) pthread_create(&th[i].thr, NULL, thr_udp_srv_init, &th[i]);
+	}
+
+	if (debug >= 2) {
+		RB_INIT(&flow_root);
+		signal(SIGINFO, flow_dump);
 	}
 
 	/* Wait */
