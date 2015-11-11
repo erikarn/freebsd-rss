@@ -14,6 +14,7 @@
 #include <sys/cpuset.h>
 #include <sys/socket.h>
 #include <sys/errno.h>
+#include <sys/tree.h>
 
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -44,6 +45,52 @@ struct udp_srv_thread {
 	struct event *ev_read, *ev_write;
 	struct event *ev_read6, *ev_write6;
 };
+
+struct flow {
+	RB_ENTRY(flow) link;
+	uint32_t flowid;
+	uint32_t flowtype;
+	uint32_t flow_rssbucket;
+	uint64_t count;
+};
+
+static pthread_mutex_t flow_lock;
+
+static int flow_cmp(struct flow *a, struct flow *b);
+
+RB_HEAD(flow_tree, flow) flow_root;
+RB_PROTOTYPE_STATIC(flow_tree, flow, link, flow_cmp);
+RB_GENERATE_STATIC(flow_tree, flow, link, flow_cmp);
+
+static int
+flow_cmp(struct flow *a, struct flow *b)
+{
+	if (a->flowid != b->flowid)
+		return (a->flowid - b->flowid);
+
+	if (a->flowtype != b->flowtype)
+		return (a->flowtype - b->flowtype);
+
+	return (a->flow_rssbucket - b->flow_rssbucket);
+}
+
+static void
+flow_dump(int signo)
+{
+	struct flow *fp;
+
+	if (RB_EMPTY(&flow_root)) {
+		printf("flow tree is empty.\n");
+		return;
+	}
+
+	pthread_mutex_lock(&flow_lock);
+	RB_FOREACH(fp, flow_tree, &flow_root) {
+		printf("count(flowid=0x%08x,flowtype=%u,flow_rssbucket=%u) = %lu\n",
+		    fp->flowid, fp->flowtype, fp->flow_rssbucket, fp->count);
+	}
+	pthread_mutex_unlock(&flow_lock);
+}
 
 static int
 inet_aton6(const char *str, struct in6_addr *addr)
@@ -329,6 +376,32 @@ thr_parse_msghdr(struct msghdr *m, int af_family)
 		}
 	}
 
+	if (debug >= 2) {
+		struct flow *nfp, *fp;
+
+		nfp = malloc(sizeof(*nfp));
+		if (nfp == NULL) {
+			warn("%s: malloc", __func__);
+			return;
+		}
+
+		nfp->flowid = flowid;
+		nfp->flowtype = flowtype;
+		nfp->flow_rssbucket = flow_rssbucket;
+
+		pthread_mutex_lock(&flow_lock);
+		fp = RB_FIND(flow_tree, &flow_root, nfp);
+		if (fp == NULL) {
+			nfp->count = 1;
+			RB_INSERT(flow_tree, &flow_root, nfp);
+		} else {
+			fp->count++;
+			free(nfp);
+		}
+		pthread_mutex_unlock(&flow_lock);
+		return;
+	}
+
 	printf("  flowid=0x%08x; flowtype=%d; bucket=%d\n", flowid, flowtype, flow_rssbucket);
 }
 
@@ -353,7 +426,6 @@ thr_ev_timer(int fd, short what, void *arg)
 	tv.tv_usec = 0;
 	evtimer_add(th->ev_timer, &tv);
 }
-
 
 static void
 thr_udp_ev_read(int fd, short what, void *arg, int af_family)
@@ -401,10 +473,12 @@ thr_udp_ev_read(int fd, short what, void *arg, int af_family)
 		sin_len = m.msg_namelen;
 
 		if (debug) {
-			printf("  recv: len=%d, controllen=%d\n",
-			    (int) ret,
-			    (int) m.msg_controllen);
-			thr_parse_sockaddr((struct sockaddr *) &sin);
+			if (debug == 1) {
+				printf("  recv: len=%d, controllen=%d\n",
+				    (int) ret,
+				    (int) m.msg_controllen);
+				thr_parse_sockaddr((struct sockaddr *) &sin);
+			}
 			thr_parse_msghdr(&m, af_family);
 		}
 		i++;
@@ -523,7 +597,7 @@ usage(const char *progname)
 	fprintf(stderr,
 	    "    [-r <0|1>] [-s <v4 listen address] [-S <v6 listen address]\n");
 	fprintf(stderr,
-	    "    [-p <v4 listen port>] [-P [v6 listen port] [-d]\n");
+	    "    [-p <v4 listen port>] [-P [v6 listen port] [-d[d]]\n");
 	exit(1);
 }
 
@@ -548,7 +622,7 @@ main(int argc, char *argv[])
 	while ((ch = getopt(argc, argv, "dhr:s:S:p:P:")) != -1) {
 		switch (ch) {
 		case 'd':
-			debug = 1;
+			debug += 1;
 			break;
 		case 'r':
 			do_response = atoi(optarg);
@@ -592,6 +666,12 @@ main(int argc, char *argv[])
 	sa.sa_flags = 0;
 	if (sigemptyset(&sa.sa_mask) == -1 || sigaction(SIGPIPE, &sa, 0) == -1)
 		perror("failed to ignore SIGPIPE; sigaction");
+
+	if (debug >= 2) {
+		pthread_mutex_init(&flow_lock, NULL);
+		RB_INIT(&flow_root);
+		signal(SIGINFO, flow_dump);
+	}
 
 	/* Allocate enough threads - one per bucket */
 	th = calloc(rc->rss_nbuckets, sizeof(*th));
