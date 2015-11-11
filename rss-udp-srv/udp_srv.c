@@ -549,9 +549,15 @@ thr_udp_srv_init(void *arg)
 	struct udp_srv_thread *th = arg;
 	int opt;
 	socklen_t optlen;
+	sigset_t sigs;
 	int retval;
 	char buf[128];
 	struct timeval tv;
+
+	/* Disable SIGINFO */
+	if (sigemptyset(&sigs) == -1 || sigaddset(&sigs, SIGINFO) == -1
+	    || pthread_sigmask(SIG_BLOCK, &sigs, NULL) != 0)
+		warn("failed to ignore SIGINFO");
 
 	/* thread pin for RSS */
 	if (pthread_setaffinity_np(th->thr, sizeof(cpuset_t), &th->cs) != 0)
