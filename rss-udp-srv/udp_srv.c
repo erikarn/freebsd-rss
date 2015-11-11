@@ -33,6 +33,7 @@ struct flow {
 	uint32_t flowtype;
 	uint32_t flow_rssbucket;
 	uint64_t count;
+	uint64_t prev_count;
 };
 
 static int flow_cmp(struct flow *a, struct flow *b);
@@ -59,7 +60,6 @@ struct udp_srv_thread {
 	struct event *ev_read, *ev_write;
 	struct event *ev_read6, *ev_write6;
 	struct flow_tree flow_root;
-	pthread_mutex_t flow_lock;
 };
 
 static struct udp_srv_thread *threads;
@@ -83,12 +83,11 @@ flow_dump(int signo)
 	struct udp_srv_thread *th = threads;
 	struct rss_config *rc;
 	struct flow *fp, *nfp;
-	int i;
+	int count, i;
 
 	rc = rss_config_get();
 
 	for (i = 0; i < rc->rss_nbuckets; i++) {
-		pthread_mutex_lock(&th[i].flow_lock);
 		RB_FOREACH(fp, flow_tree, &th[i].flow_root) {
 			nfp = RB_FIND(flow_tree, &flow_root, fp);
 			if (nfp == NULL) {
@@ -98,14 +97,17 @@ flow_dump(int signo)
 					continue;
 				}
 
-				bcopy(fp, nfp, sizeof(*nfp));
+				nfp->flowid = fp->flowid;
+				nfp->flowtype = fp->flowtype;
+				nfp->flow_rssbucket = fp->flow_rssbucket;
+				nfp->count = 0;
 				RB_INSERT(flow_tree, &flow_root, nfp);
-			} else {
-				nfp->count += fp->count;
 			}
-			fp->count = 0;
+
+			count = fp->count; /* snapshot */
+			nfp->count += count - fp->prev_count;
+			fp->prev_count = count;
 		}
-		pthread_mutex_unlock(&th[i].flow_lock);
 	}
 
 	if (RB_EMPTY(&flow_root)) {
@@ -419,16 +421,15 @@ thr_parse_msghdr(struct msghdr *m, int af_family, void *arg)
 		nfp->flowtype = flowtype;
 		nfp->flow_rssbucket = flow_rssbucket;
 
-		pthread_mutex_lock(&th->flow_lock);
 		fp = RB_FIND(flow_tree, &th->flow_root, nfp);
 		if (fp == NULL) {
 			nfp->count = 1;
+			nfp->prev_count = 0;
 			RB_INSERT(flow_tree, &th->flow_root, nfp);
 		} else {
 			fp->count++;
 			free(nfp);
 		}
-		pthread_mutex_unlock(&th->flow_lock);
 		return;
 	}
 
@@ -716,7 +717,6 @@ main(int argc, char *argv[])
 		th[i].v6_listen_addr = lcl6_addr;
 		th[i].v6_listen_port = v6_port;
 		th[i].do_response = do_response;
-		pthread_mutex_init(&th[i].flow_lock, NULL);
 		RB_INIT(&th[i].flow_root);
 		printf("starting: tid=%d, rss_bucket=%d, cpuset=",
 		    th[i].tid,
