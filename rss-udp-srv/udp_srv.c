@@ -14,6 +14,7 @@
 #include <sys/cpuset.h>
 #include <sys/socket.h>
 #include <sys/errno.h>
+#include <sys/tree.h>
 
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -25,6 +26,21 @@
 #include "librss.h"
 
 static int debug = 0;
+
+struct flow {
+	RB_ENTRY(flow) link;
+	uint32_t flowid;
+	uint32_t flowtype;
+	uint32_t flow_rssbucket;
+	uint64_t count;
+	uint64_t prev_count;
+};
+
+static int flow_cmp(struct flow *a, struct flow *b);
+
+RB_HEAD(flow_tree, flow);
+RB_PROTOTYPE_STATIC(flow_tree, flow, link, flow_cmp);
+RB_GENERATE_STATIC(flow_tree, flow, link, flow_cmp);
 
 struct udp_srv_thread {
 	pthread_t thr;
@@ -43,7 +59,69 @@ struct udp_srv_thread {
 	struct event *ev_timer;
 	struct event *ev_read, *ev_write;
 	struct event *ev_read6, *ev_write6;
+	struct flow_tree flow_root;
 };
+
+static struct udp_srv_thread *threads;
+static struct flow_tree flow_root;
+
+static int
+flow_cmp(struct flow *a, struct flow *b)
+{
+	if (a->flowid != b->flowid)
+		return (a->flowid - b->flowid);
+
+	if (a->flowtype != b->flowtype)
+		return (a->flowtype - b->flowtype);
+
+	return (a->flow_rssbucket - b->flow_rssbucket);
+}
+
+static void
+flow_dump(int signo)
+{
+	struct udp_srv_thread *th = threads;
+	struct rss_config *rc;
+	struct flow *fp, *nfp;
+	int count, i;
+
+	rc = rss_config_get();
+
+	for (i = 0; i < rc->rss_nbuckets; i++) {
+		RB_FOREACH(fp, flow_tree, &th[i].flow_root) {
+			nfp = RB_FIND(flow_tree, &flow_root, fp);
+			if (nfp == NULL) {
+				nfp = malloc(sizeof(*nfp));
+				if (nfp == NULL) {
+					warn("%s: malloc", __func__);
+					continue;
+				}
+
+				nfp->flowid = fp->flowid;
+				nfp->flowtype = fp->flowtype;
+				nfp->flow_rssbucket = fp->flow_rssbucket;
+				nfp->count = 0;
+				RB_INSERT(flow_tree, &flow_root, nfp);
+			}
+
+			count = fp->count; /* snapshot */
+			nfp->count += count - fp->prev_count;
+			fp->prev_count = count;
+		}
+	}
+
+	if (RB_EMPTY(&flow_root)) {
+		printf("flow tree is empty.\n");
+		return;
+	}
+
+	RB_FOREACH(fp, flow_tree, &flow_root) {
+		printf("count(flowid=0x%08x,flowtype=%u,flow_rssbucket=%u) = %lu\n",
+		    fp->flowid, fp->flowtype, fp->flow_rssbucket, fp->count);
+	}
+
+	rss_config_free(rc);
+}
 
 static int
 inet_aton6(const char *str, struct in6_addr *addr)
@@ -282,8 +360,9 @@ thr_parse_sockaddr(const struct sockaddr *addr)
 }
 
 static void
-thr_parse_msghdr(struct msghdr *m, int af_family)
+thr_parse_msghdr(struct msghdr *m, int af_family, void *arg)
 {
+	struct udp_srv_thread *th = arg;
 	const struct cmsghdr *c;
 	uint32_t flowid;
 	uint32_t flowtype;
@@ -329,6 +408,31 @@ thr_parse_msghdr(struct msghdr *m, int af_family)
 		}
 	}
 
+	if (debug >= 2) {
+		struct flow *nfp, *fp;
+
+		nfp = malloc(sizeof(*nfp));
+		if (nfp == NULL) {
+			warn("%s: malloc", __func__);
+			return;
+		}
+
+		nfp->flowid = flowid;
+		nfp->flowtype = flowtype;
+		nfp->flow_rssbucket = flow_rssbucket;
+
+		fp = RB_FIND(flow_tree, &th->flow_root, nfp);
+		if (fp == NULL) {
+			nfp->count = 1;
+			nfp->prev_count = 0;
+			RB_INSERT(flow_tree, &th->flow_root, nfp);
+		} else {
+			fp->count++;
+			free(nfp);
+		}
+		return;
+	}
+
 	printf("  flowid=0x%08x; flowtype=%d; bucket=%d\n", flowid, flowtype, flow_rssbucket);
 }
 
@@ -353,7 +457,6 @@ thr_ev_timer(int fd, short what, void *arg)
 	tv.tv_usec = 0;
 	evtimer_add(th->ev_timer, &tv);
 }
-
 
 static void
 thr_udp_ev_read(int fd, short what, void *arg, int af_family)
@@ -401,11 +504,13 @@ thr_udp_ev_read(int fd, short what, void *arg, int af_family)
 		sin_len = m.msg_namelen;
 
 		if (debug) {
-			printf("  recv: len=%d, controllen=%d\n",
-			    (int) ret,
-			    (int) m.msg_controllen);
-			thr_parse_sockaddr((struct sockaddr *) &sin);
-			thr_parse_msghdr(&m, af_family);
+			if (debug == 1) {
+				printf("  recv: len=%d, controllen=%d\n",
+				    (int) ret,
+				    (int) m.msg_controllen);
+				thr_parse_sockaddr((struct sockaddr *) &sin);
+			}
+			thr_parse_msghdr(&m, af_family, arg);
 		}
 		i++;
 		th->recv_pkts++;
@@ -444,9 +549,15 @@ thr_udp_srv_init(void *arg)
 	struct udp_srv_thread *th = arg;
 	int opt;
 	socklen_t optlen;
+	sigset_t sigs;
 	int retval;
 	char buf[128];
 	struct timeval tv;
+
+	/* Disable SIGINFO */
+	if (sigemptyset(&sigs) == -1 || sigaddset(&sigs, SIGINFO) == -1
+	    || pthread_sigmask(SIG_BLOCK, &sigs, NULL) != 0)
+		warn("failed to ignore SIGINFO");
 
 	/* thread pin for RSS */
 	if (pthread_setaffinity_np(th->thr, sizeof(cpuset_t), &th->cs) != 0)
@@ -523,7 +634,7 @@ usage(const char *progname)
 	fprintf(stderr,
 	    "    [-r <0|1>] [-s <v4 listen address] [-S <v6 listen address]\n");
 	fprintf(stderr,
-	    "    [-p <v4 listen port>] [-P [v6 listen port] [-d]\n");
+	    "    [-p <v4 listen port>] [-P [v6 listen port] [-d[d]]\n");
 	exit(1);
 }
 
@@ -548,7 +659,7 @@ main(int argc, char *argv[])
 	while ((ch = getopt(argc, argv, "dhr:s:S:p:P:")) != -1) {
 		switch (ch) {
 		case 'd':
-			debug = 1;
+			debug += 1;
 			break;
 		case 'r':
 			do_response = atoi(optarg);
@@ -598,6 +709,8 @@ main(int argc, char *argv[])
 	if (th == NULL)
 		err(127, "calloc");
 
+	threads = th;
+
 	for (i = 0; i < rc->rss_nbuckets; i++) {
 		th[i].tid = i;
 		th[i].rss_bucket = i;
@@ -610,11 +723,17 @@ main(int argc, char *argv[])
 		th[i].v6_listen_addr = lcl6_addr;
 		th[i].v6_listen_port = v6_port;
 		th[i].do_response = do_response;
+		RB_INIT(&th[i].flow_root);
 		printf("starting: tid=%d, rss_bucket=%d, cpuset=",
 		    th[i].tid,
 		    th[i].rss_bucket);
 		printset(&th[i].cs);
 		(void) pthread_create(&th[i].thr, NULL, thr_udp_srv_init, &th[i]);
+	}
+
+	if (debug >= 2) {
+		RB_INIT(&flow_root);
+		signal(SIGINFO, flow_dump);
 	}
 
 	/* Wait */
