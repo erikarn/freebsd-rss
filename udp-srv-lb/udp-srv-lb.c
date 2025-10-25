@@ -22,6 +22,8 @@ struct thr_setup {
 	int tid;
 	int cpuid;
 	pthread_t thr;
+	uint64_t nrx;
+	uint64_t old_nrx;
 };
 
 void *
@@ -43,7 +45,7 @@ srv_thr(void *s)
 		warn("pthread_setaffinity_np (id %d)", th->tid);
 #endif
 
-	th->s = socket(PF_INET, SOCK_STREAM, 0);
+	th->s = socket(PF_INET, SOCK_DGRAM, 0);
 	if (th->s < 0) {
 		warn("%s: socket", __func__);
 		return (NULL);
@@ -75,6 +77,7 @@ srv_thr(void *s)
 		return (NULL);
 	}
 
+#if 0
 	/* Listen */
 	retval = listen(th->s, -1);
 	if (retval < 0) {
@@ -82,22 +85,20 @@ srv_thr(void *s)
 		close(th->s);
 		return (NULL);
 	}
+#endif
 
 	/* Accept loop */
 	for (;;) {
-		uint32_t flowid = 0, rsscpu = 0, rssbucket = 0;
+		int len;
+		char buf[1024];
 
-		optlen = sizeof(sa);
-		fd = accept(th->s, (struct sockaddr *) &sa,
-		    &optlen);
-		if (fd < 0) {
-			warn("%s: accept", __func__);
+		len = recv(th->s, buf, sizeof(buf), 0);
+		if (len < 0) {
+			warn("%s: len", __func__);
 			continue;
 		}
 
-		printf("%s: thr=%d\n", __func__, th->tid);
-		write(fd, "hello, world!\n", 14);
-		close(fd);
+		th->nrx++;
 	}
 
 	return (NULL);
@@ -176,6 +177,8 @@ main(int argc, char *argv[])
 		fprintf(stderr, "Couldn't read hw.ncpu\n");
 		exit(127);
 	}
+	ncpu = 4;
+	//ncpu = 1;
 	nbuckets = ncpu;
 
 	/*
@@ -195,6 +198,22 @@ main(int argc, char *argv[])
 		    ts[i].tid,
 		    ts[i].cpuid);
 		(void) pthread_create(&ts[i].thr, NULL, srv_thr, &ts[i]);
+	}
+
+	while (1) {
+		uint64_t tot_diff, tot;
+		sleep(1);
+		printf("Stats: ");
+		tot_diff = 0; tot = 0;
+		for (i = 0; i < nbuckets; i++) {
+			uint64_t diff = ts[i].nrx - ts[i].old_nrx;
+			// Ew, reaching into that threads memory...
+			ts[i].old_nrx = ts[i].nrx;
+
+			printf("%d: %lu (%lu) ", i, ts[i].nrx, diff);
+			tot_diff += diff;
+		}
+		printf(" [%lu]\n", tot_diff);
 	}
 
 	/* Wait */
